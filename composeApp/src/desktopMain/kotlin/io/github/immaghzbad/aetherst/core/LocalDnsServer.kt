@@ -66,7 +66,8 @@ class LocalDnsServer(
                     val clientPort = pkt.port
                     executor.execute {
                         var resp = forwardViaSocksTcp(data)
-                        if (resp == null) resp = forwardDirect(data)
+                        // Anti-leak guard: never leak unencrypted DNS directly when a proxy is configured
+                        if (resp == null && socksPort <= 0) resp = forwardDirect(data)
                         if (resp != null) {
                             try {
                                 val outPkt = DatagramPacket(resp, resp.size, clientAddr, clientPort)
@@ -110,7 +111,8 @@ class LocalDnsServer(
             }
             if (off != len) { client.close(); return }
             var resp = forwardViaSocksTcp(query)
-            if (resp == null) resp = forwardDirect(query)
+            // Anti-leak guard: never leak unencrypted DNS directly when a proxy is configured
+            if (resp == null && socksPort <= 0) resp = forwardDirect(query)
             if (resp == null) { client.close(); return }
             outs.write((resp.size shr 8) and 0xFF)
             outs.write(resp.size and 0xFF)
