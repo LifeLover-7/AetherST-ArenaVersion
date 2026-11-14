@@ -9,7 +9,7 @@ plugins {
 
 android {
   namespace = "io.github.immaghzbad.aetherst"
-  compileSdk = 35
+  compileSdk = 36
 
   defaultConfig {
     applicationId = "io.github.immaghzbad.aetherst"
