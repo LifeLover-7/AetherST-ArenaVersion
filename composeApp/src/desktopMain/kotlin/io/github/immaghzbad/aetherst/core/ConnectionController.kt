@@ -262,8 +262,13 @@ actual object ConnectionController {
             } else if (effectiveConfig.exitNodeMode == ExitNodeMode.CUSTOM_WG) {
                 val wgCfg = effectiveConfig.customWgConfig
                 if (wgCfg.isValid()) {
+                    val binaryPath = io.github.immaghzbad.aetherst.shared.core.getBinaryManager(context).prepareBinary("aether")
+                    val workDir = System.getProperty("user.home") + "/.aether"
+                    java.io.File(workDir).mkdirs()
                     val tunnel = io.github.immaghzbad.aetherst.shared.net.WireGuardExitTunnel(
                         config = wgCfg,
+                        binaryPath = binaryPath,
+                        workingDir = workDir,
                         primarySocksHost = "127.0.0.1",
                         primarySocksPort = coreSocksPort,
                         localListenPort = 10805
@@ -394,14 +399,20 @@ actual object ConnectionController {
                                 try {
                                     val wgCfg = effectiveConfig.customWgConfig
                                     if (wgCfg.isValid()) {
+                                        val binaryPath = io.github.immaghzbad.aetherst.shared.core.getBinaryManager(context).prepareBinary("aether")
+                                        val workDir = System.getProperty("user.home") + "/.aether"
+                                        java.io.File(workDir).mkdirs()
                                         val tunnel = io.github.immaghzbad.aetherst.shared.net.WireGuardExitTunnel(
                                             config = wgCfg,
+                                            binaryPath = binaryPath,
+                                            workingDir = workDir,
                                             primarySocksHost = "127.0.0.1",
                                             primarySocksPort = coreSocksPort,
                                             localListenPort = 10805
                                         )
                                         tunnel.start()
                                         wgExitTunnel = tunnel
+                                        ActiveProxyProvider.customWgPort = 10805
                                     }
                                 } catch (_: Throwable) {}
                             } else if (effectiveConfig.exitNodeMode == ExitNodeMode.CUSTOM_SOCKS5 && customSocksRelay == null) {

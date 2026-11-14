@@ -511,12 +511,16 @@ class AetherVpnService : VpnService() {
         }
         builder.addRoute("0.0.0.0", 0)
 
-        if (filteredWg != null && filteredWg.dnsServers.isNotEmpty()) {
-            for (dns in filteredWg.dnsServers) {
-                runCatching { builder.addDnsServer(dns) }
-            }
-        } else if (engine == TunnelEngine.HEV_TUN2SOCKS) {
+        if (engine == TunnelEngine.HEV_TUN2SOCKS) {
             builder.addDnsServer(HevTun2SocksConfig.MAP_DNS_ADDRESS)
+            if (filteredWg != null && filteredWg.dnsServers.isNotEmpty()) {
+                for (dns in filteredWg.dnsServers) {
+                    val cleanDns = dns.trim()
+                    if (cleanDns.isNotEmpty() && !cleanDns.startsWith("10.") && !cleanDns.startsWith("172.") && !cleanDns.startsWith("192.168.")) {
+                        runCatching { builder.addDnsServer(cleanDns) }
+                    }
+                }
+            }
         } else {
             builder.addDnsServer("1.1.1.1")
             builder.addDnsServer("8.8.8.8")
@@ -681,6 +685,7 @@ class AetherVpnService : VpnService() {
                 socksBridge = null
                 wgExitTunnel?.stop()
                 wgExitTunnel = null
+                ActiveProxyProvider.customWgPort = null
                 customSocksRelay?.stop()
                 customSocksRelay = null
                 try { PsiphonController.stop() } catch (_: Throwable) {}
@@ -855,8 +860,11 @@ class AetherVpnService : VpnService() {
                 if (wgCfg.isValid()) {
                     if (wgExitTunnel == null) {
                         val primaryPort = config.socksPort.toIntOrNull() ?: 2021
+                        val binaryFile = io.github.immaghzbad.aetherst.core.BinaryManager.prepareBinary(this@AetherVpnService)
                         val tunnel = WireGuardExitTunnel(
                             config = wgCfg,
+                            binaryPath = binaryFile.absolutePath,
+                            workingDir = filesDir.absolutePath,
                             primarySocksHost = "127.0.0.1",
                             primarySocksPort = primaryPort,
                             localListenPort = localPort
@@ -864,12 +872,14 @@ class AetherVpnService : VpnService() {
                         val started = runCatching { tunnel.start() }.getOrDefault(false)
                         if (started) {
                             wgExitTunnel = tunnel
+                            ActiveProxyProvider.customWgPort = localPort
                             return "127.0.0.1" to localPort
                         } else {
                             LogRepository.w("[VpnService] Custom WG start failed, falling back to direct primary socks")
                             return "127.0.0.1" to (config.socksPort.toIntOrNull() ?: 2021)
                         }
                     }
+                    ActiveProxyProvider.customWgPort = localPort
                     return "127.0.0.1" to localPort
                 } else {
                     LogRepository.w("[VpnService] Custom WG config invalid, falling back to direct primary socks")

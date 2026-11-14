@@ -119,32 +119,24 @@ object IpInfoRepository {
                             return@withContext
                         }
                     } else {
-                        delay(400.milliseconds)
-                        for (attempt in 1..5) {
-                            LogRepository.i("Querying public IP via tunnel ($socksHost:$socksPort) attempt $attempt/5...", "IpWhois")
+                        for (attempt in 1..4) {
+                            LogRepository.i("Querying public IP via tunnel ($socksHost:$socksPort) attempt $attempt/4...", "IpWhois")
                             val rawResult = fetchParallelViaProxy(socksHost, socksPort, provider)
                             val result = enrichCountryIfMissing(rawResult, socksHost, socksPort)
                             if (result != null && result.ip.isNotEmpty()) {
-                                // If proxy returned IR IP on an early attempt, tunnel may still be completing egress handshake
-                                if (result.countryCode.uppercase() == "IR" && attempt < 3) {
-                                    LogRepository.w("Tunnel returned domestic IP on attempt $attempt, waiting for egress to settle...", "IpWhois")
-                                    delay(1000.milliseconds)
-                                    continue
-                                }
                                 _ipInfo.value = result.copy(isLoading = false, error = null)
                                 LogRepository.i("Tunnel IP: ${result.ip} (${result.country}) [${result.countryCode}]", "IpWhois")
                                 return@withContext
                             }
-                            if (attempt < 5) {
-                                delay((800L * attempt).milliseconds)
+                            if (attempt < 4) {
+                                delay(500.milliseconds)
                             }
                         }
                         LogRepository.w("SOCKS proxy lookup failed after all attempts.", "IpWhois")
                     }
                     LogRepository.w("${if (useProxy) "SOCKS proxy" else "Direct"} IP lookup failed after all attempts.", "IpWhois")
                     val prev = _ipInfo.value
-                    val isStaleIranInProxy = useProxy && prev.countryCode.uppercase() == "IR"
-                    if (prev.ip.isNotEmpty() && !isStaleIranInProxy) {
+                    if (prev.ip.isNotEmpty()) {
                         _ipInfo.value = prev.copy(isLoading = false, error = null)
                     } else {
                         _ipInfo.value = prev.copy(
@@ -205,7 +197,11 @@ object IpInfoRepository {
 
     private suspend fun fetchParallelViaProxy(socksHost: String, socksPort: Int, provider: IpInfoProvider = IpInfoProvider.AUTO): IpInfo? = coroutineScope {
         val all = proxySources(socksHost, socksPort)
-        val ordered = if (provider == IpInfoProvider.AUTO) all.filter { geoProviders.contains(it.first) }.shuffled() else all.filter { it.first == provider }
+        val ordered = if (provider == IpInfoProvider.AUTO) {
+            val fast = all.filter { it.first == IpInfoProvider.CLOUDFLARE || it.first == IpInfoProvider.IPSB }
+            val rest = all.filter { geoProviders.contains(it.first) && it.first != IpInfoProvider.CLOUDFLARE && it.first != IpInfoProvider.IPSB }.shuffled()
+            fast + rest
+        } else all.filter { it.first == provider }
         if (ordered.isEmpty()) return@coroutineScope null
         val channel = Channel<IpInfo>(Channel.UNLIMITED)
         val jobs = ordered.map { pair ->

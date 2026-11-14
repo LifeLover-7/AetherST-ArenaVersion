@@ -456,21 +456,20 @@ class ConnectionController private constructor(context: Context) : ConnectionCon
                             runNativeBounded<Unit>(30000L, "Psiphon.start") { PsiphonController.start(appContext, effectiveConfig, upstream = config.upstreamProxy.takeIf { config.upstreamProxyEnabled && it.isNotBlank() }) }
                             if (PsiphonController.isRunning()) {
                                 var waitPsiphon = 0
-                                while (waitPsiphon < 30 && !PsiphonController.isConnected()) { delay(1000.milliseconds); waitPsiphon++ }
-                                var stableWait = 0
-                                while (stableWait < 25 && !PsiphonController.stableFor(2500)) { delay(1000.milliseconds); stableWait++ }
-                                if (PsiphonController.isConnected() && PsiphonController.stableFor(2500)) {
-                                    LogRepository.i("[Controller] Psiphon settled (stable), proceeding to chain core")
+                                while (waitPsiphon < 40 && !PsiphonController.isConnected()) { delay(500.milliseconds); waitPsiphon++ }
+                                if (PsiphonController.isConnected()) {
+                                    delay(500.milliseconds)
+                                    LogRepository.i("[Controller] Psiphon settled (connected), proceeding to chain core")
                                     effectiveConfig = effectiveConfig.copy(upstreamProxyEnabled = true, upstreamProxy = PsiphonController.getUpstreamProxy())
                                     ActiveProxyProvider.psiphonProxyUrl = PsiphonController.getUpstreamProxy()
                                     LogRepository.i("[Controller] Psiphon active, chaining via ${effectiveConfig.upstreamProxy} outer=${effectiveConfig.protocol}")
                                 } else {
-                                    LogRepository.e("[Controller] Psiphon not connected/stable - chain requires Psiphon, aborting")
+                                    LogRepository.e("[Controller] Psiphon not connected - chain requires Psiphon, aborting")
                                     ActiveProxyProvider.psiphonProxyUrl = null
                                     PsiphonController.stop()
                                     psiphonChaining = false
                                     runCatching { runner.stop() }
-                                    throw IllegalStateException("Psiphon not connected/stable")
+                                    throw IllegalStateException("Psiphon not connected")
                                 }
                             } else {
                                 LogRepository.e("[Controller] Psiphon failed to start - chain requires Psiphon, aborting")
@@ -507,10 +506,11 @@ class ConnectionController private constructor(context: Context) : ConnectionCon
                                 val started = runNativeBounded<Unit>(30000L, "Psiphon.bg") { PsiphonController.start(appContext, effectiveConfig, upstream = httpUpstream) } != null && PsiphonController.isRunning()
                                 if (started) {
                                     var waitPsiphon = 0
-                                    while (waitPsiphon < 30 && !PsiphonController.isConnected()) { delay(1000.milliseconds); waitPsiphon++ }
-                                    var stableWait = 0
-                                    while (stableWait < 25 && !PsiphonController.stableFor(2500)) { delay(1000.milliseconds); stableWait++ }
-                                    psiphonReady = PsiphonController.isConnected() && PsiphonController.stableFor(2500)
+                                    while (waitPsiphon < 40 && !PsiphonController.isConnected()) { delay(500.milliseconds); waitPsiphon++ }
+                                    if (PsiphonController.isConnected()) {
+                                        delay(500.milliseconds)
+                                        psiphonReady = true
+                                    }
                                 }
                             } catch (_: Exception) {}
                             if (psiphonReady) {
@@ -544,27 +544,23 @@ class ConnectionController private constructor(context: Context) : ConnectionCon
                         runNativeBounded<Unit>(30000L, "Psiphon.start") { PsiphonController.start(appContext, effectiveConfig, upstream = config.upstreamProxy.takeIf { config.upstreamProxyEnabled && it.isNotBlank() }) }
                         if (PsiphonController.isRunning()) {
                             var waitPsiphon = 0
-                            while (waitPsiphon < 30 && !PsiphonController.isConnected()) {
-                                delay(1000.milliseconds)
+                            while (waitPsiphon < 40 && !PsiphonController.isConnected()) {
+                                delay(500.milliseconds)
                                 waitPsiphon++
                             }
-                            var stableWait = 0
-                            while (stableWait < 25 && !PsiphonController.stableFor(2500)) {
-                                delay(1000.milliseconds)
-                                stableWait++
-                            }
-                            if (PsiphonController.isConnected() && PsiphonController.stableFor(2500)) {
-                                LogRepository.i("[Controller] Psiphon settled (stable), proceeding to chain core")
+                            if (PsiphonController.isConnected()) {
+                                delay(500.milliseconds)
+                                LogRepository.i("[Controller] Psiphon settled (connected), proceeding to chain core")
                                 effectiveConfig = effectiveConfig.copy(upstreamProxyEnabled = true, upstreamProxy = PsiphonController.getUpstreamProxy())
                                 ActiveProxyProvider.psiphonProxyUrl = PsiphonController.getUpstreamProxy()
                                 LogRepository.i("[Controller] Psiphon active, chaining via ${effectiveConfig.upstreamProxy} outer=${effectiveConfig.protocol}")
                             } else {
-                                LogRepository.e("[Controller] Psiphon not connected/stable - chain requires Psiphon, aborting")
+                                LogRepository.e("[Controller] Psiphon not connected - chain requires Psiphon, aborting")
                                 ActiveProxyProvider.psiphonProxyUrl = null
                                 PsiphonController.stop()
                                 psiphonChaining = false
                                 runCatching { runner.stop() }
-                                throw IllegalStateException("Psiphon not connected/stable")
+                                throw IllegalStateException("Psiphon not connected")
                             }
                         } else {
                             LogRepository.e("[Controller] Psiphon failed to start in fallback - chain requires Psiphon, aborting")
@@ -601,10 +597,11 @@ class ConnectionController private constructor(context: Context) : ConnectionCon
                                     val started = runNativeBounded<Unit>(30000L, "Psiphon.bg") { PsiphonController.start(appContext, effectiveConfig, upstream = httpUpstream) } != null && PsiphonController.isRunning()
                                     if (started) {
                                         var waitPsiphon = 0
-                                        while (waitPsiphon < 30 && !PsiphonController.isConnected()) { delay(1000.milliseconds); waitPsiphon++ }
-                                        var stableWait = 0
-                                        while (stableWait < 25 && !PsiphonController.stableFor(2500)) { delay(1000.milliseconds); stableWait++ }
-                                        psiphonReady = PsiphonController.isConnected() && PsiphonController.stableFor(2500)
+                                        while (waitPsiphon < 40 && !PsiphonController.isConnected()) { delay(500.milliseconds); waitPsiphon++ }
+                                        if (PsiphonController.isConnected()) {
+                                            delay(500.milliseconds)
+                                            psiphonReady = true
+                                        }
                                     }
                                 } catch (_: Exception) {}
                                 if (psiphonReady) {
@@ -639,11 +636,10 @@ class ConnectionController private constructor(context: Context) : ConnectionCon
                                 runNativeBounded<Unit>(30000L, "Psiphon.start") { PsiphonController.start(appContext, effectiveConfig, upstream = config.upstreamProxy.takeIf { config.upstreamProxyEnabled && it.isNotBlank() }) }
                                 if (PsiphonController.isRunning()) {
                                     var waitPsiphon = 0
-                                    while (waitPsiphon < 30 && !PsiphonController.isConnected()) { delay(1000.milliseconds); waitPsiphon++ }
-                                    var stableWait = 0
-                                    while (stableWait < 25 && !PsiphonController.stableFor(2500)) { delay(1000.milliseconds); stableWait++ }
-                                    if (PsiphonController.isConnected() && PsiphonController.stableFor(2500)) {
-                                        LogRepository.i("[Controller] Psiphon settled (stable), proceeding to chain core")
+                                    while (waitPsiphon < 40 && !PsiphonController.isConnected()) { delay(500.milliseconds); waitPsiphon++ }
+                                    if (PsiphonController.isConnected()) {
+                                        delay(500.milliseconds)
+                                        LogRepository.i("[Controller] Psiphon settled (connected), proceeding to chain core")
                                         effectiveConfig = effectiveConfig.copy(upstreamProxyEnabled = true, upstreamProxy = PsiphonController.getUpstreamProxy())
                                         ActiveProxyProvider.psiphonProxyUrl = PsiphonController.getUpstreamProxy()
                                         LogRepository.i("[Controller] Psiphon active, chaining via ${effectiveConfig.upstreamProxy} outer=${effectiveConfig.protocol}")
@@ -654,12 +650,12 @@ class ConnectionController private constructor(context: Context) : ConnectionCon
                                         }
                                         return
                                     } else {
-                                        LogRepository.e("[Controller] Psiphon not connected/stable over ${effectiveConfig.protocol} - chain requires Psiphon, aborting")
+                                        LogRepository.e("[Controller] Psiphon not connected over ${effectiveConfig.protocol} - chain requires Psiphon, aborting")
                                         PsiphonController.stop()
                                         ActiveProxyProvider.psiphonProxyUrl = null
                                         psiphonChaining = false
                                         runCatching { runner.stop() }
-                                        throw IllegalStateException("Psiphon not connected/stable over ${effectiveConfig.protocol}")
+                                        throw IllegalStateException("Psiphon not connected over ${effectiveConfig.protocol}")
                                     }
                                 } else {
                                     LogRepository.e("[Controller] Psiphon failed to start over ${effectiveConfig.protocol} - chain requires Psiphon, aborting")
@@ -688,10 +684,11 @@ class ConnectionController private constructor(context: Context) : ConnectionCon
                                     val started = runNativeBounded<Unit>(30000L, "Psiphon.bg") { PsiphonController.start(appContext, effectiveConfig, upstream = null) } != null && PsiphonController.isRunning()
                                     if (started) {
                                         var waitPsiphon = 0
-                                        while (waitPsiphon < 30 && !PsiphonController.isConnected()) { delay(1000.milliseconds); waitPsiphon++ }
-                                        var stableWait = 0
-                                        while (stableWait < 25 && !PsiphonController.stableFor(2500)) { delay(1000.milliseconds); stableWait++ }
-                                        psiphonReady = PsiphonController.isConnected() && PsiphonController.stableFor(2500)
+                                        while (waitPsiphon < 40 && !PsiphonController.isConnected()) { delay(500.milliseconds); waitPsiphon++ }
+                                        if (PsiphonController.isConnected()) {
+                                            delay(500.milliseconds)
+                                            psiphonReady = true
+                                        }
                                     }
                                 } catch (_: Exception) {}
                                 if (psiphonReady) {
@@ -729,27 +726,23 @@ class ConnectionController private constructor(context: Context) : ConnectionCon
                             runNativeBounded<Unit>(30000L, "Psiphon.start") { PsiphonController.start(appContext, effectiveConfig, upstream = config.upstreamProxy.takeIf { config.upstreamProxyEnabled && it.isNotBlank() }) }
                             if (PsiphonController.isRunning()) {
                                 var waitPsiphon = 0
-                                while (waitPsiphon < 30 && !PsiphonController.isConnected()) {
-                                    delay(1000.milliseconds)
+                                while (waitPsiphon < 40 && !PsiphonController.isConnected()) {
+                                    delay(500.milliseconds)
                                     waitPsiphon++
                                 }
-                                var stableWait = 0
-                                while (stableWait < 25 && !PsiphonController.stableFor(2500)) {
-                                    delay(1000.milliseconds)
-                                    stableWait++
-                                }
-                                if (PsiphonController.isConnected() && PsiphonController.stableFor(2500)) {
-                                    LogRepository.i("[Controller] Psiphon settled (stable), proceeding to chain core")
+                                if (PsiphonController.isConnected()) {
+                                    delay(500.milliseconds)
+                                    LogRepository.i("[Controller] Psiphon settled (connected), proceeding to chain core")
                                     effectiveConfig = effectiveConfig.copy(upstreamProxyEnabled = true, upstreamProxy = PsiphonController.getUpstreamProxy())
                                     ActiveProxyProvider.psiphonProxyUrl = PsiphonController.getUpstreamProxy()
                                     LogRepository.i("[Controller] Psiphon active, chaining via ${effectiveConfig.upstreamProxy} outer=${effectiveConfig.protocol}")
                                 } else {
-                                    LogRepository.e("[Controller] Psiphon not connected/stable in fallback - chain requires Psiphon, aborting")
+                                    LogRepository.e("[Controller] Psiphon not connected in fallback - chain requires Psiphon, aborting")
                                     ActiveProxyProvider.psiphonProxyUrl = null
                                     PsiphonController.stop()
                                     psiphonChaining = false
                                     runCatching { runner.stop() }
-                                    throw IllegalStateException("Psiphon not connected/stable in fallback")
+                                    throw IllegalStateException("Psiphon not connected in fallback")
                                 }
                             } else {
                                 LogRepository.e("[Controller] Psiphon failed to start in fallback - chain requires Psiphon, aborting")
@@ -1220,12 +1213,17 @@ class ConnectionController private constructor(context: Context) : ConnectionCon
         }
     }
 
-    private suspend fun awaitPsiphonStable(timeoutSec: Int = 30, stableMs: Long = 2500): Boolean {
+    private suspend fun awaitPsiphonStable(timeoutSec: Int = 20, stableMs: Long = 1000): Boolean {
         var wait = 0
-        while (wait < timeoutSec && !PsiphonController.isConnected()) { delay(1000.milliseconds); wait++ }
-        var stable = 0
-        while (stable < 25 && !PsiphonController.stableFor(stableMs)) { delay(1000.milliseconds); stable++ }
-        return PsiphonController.isConnected() && PsiphonController.stableFor(stableMs)
+        while (wait < (timeoutSec * 2) && !PsiphonController.isConnected()) {
+            delay(500.milliseconds)
+            wait++
+        }
+        if (PsiphonController.isConnected()) {
+            delay(500.milliseconds)
+            return true
+        }
+        return false
     }
 
     private suspend fun <T> runNativeBounded(timeoutMs: Long, label: String, block: () -> T): T? {

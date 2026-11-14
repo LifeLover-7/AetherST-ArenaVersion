@@ -443,7 +443,7 @@ class AetherProcessRunner(private val context: PlatformContext) {
                 }
             }
             (_connectionStatus.value == ConnectionStatus.RUNNING && (
-                lower.contains("reconnecting") || lower.contains("tunnel lost") || lower.contains("tunnel ended") ||
+                lower.contains("reconnecting to") || lower.contains("connection lost, reconnecting") || lower.contains("tunnel lost") || lower.contains("tunnel ended") ||
                 lower.contains("wireguard tunnel exited") || lower.contains("masque tunnel ended") || lower.contains("tunnel exited")
             )) || lower.contains("all gateways failed") -> {
                 goolOuterValidated = false

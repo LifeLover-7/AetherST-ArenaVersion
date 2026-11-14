@@ -701,7 +701,7 @@ class AetherProcessRunner(private val context: Context) {
                 updateState(ConnectionStatus.DATAPLANE_VALIDATED, attemptId)
                 updateState(ConnectionStatus.SOCKS_READY, attemptId)
             }
-            ((lower.contains("reconnecting") && _connectionStatus.value == ConnectionStatus.RUNNING) || isLost) -> {
+            (( (lower.contains("reconnecting to") || lower.contains("connection lost, reconnecting")) && _connectionStatus.value == ConnectionStatus.RUNNING) || isLost) -> {
                 if (isReconnecting.compareAndSet(false, true)) {
                     goolOuterValidated = false
                     dataPlaneOk = false
