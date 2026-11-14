@@ -662,7 +662,7 @@ class AetherViewModel(platformContext: PlatformContext) : ViewModel() {
         }
 
         val effectivePort = when (cfg.exitNodeMode) {
-            ExitNodeMode.CUSTOM_WG -> 10805
+            ExitNodeMode.CUSTOM_WG -> ActiveProxyProvider.customWgPort ?: 10805
             ExitNodeMode.CUSTOM_SOCKS5 -> 10806
             ExitNodeMode.PSIPHON_POOL -> {
                 val psiphon = ActiveProxyProvider.psiphonProxyUrl
@@ -715,7 +715,7 @@ class AetherViewModel(platformContext: PlatformContext) : ViewModel() {
                     PingRepository.runPing(parts.first(), parts.getOrNull(1)?.toIntOrNull() ?: 3081, useProxy = true, pingUrl = cfg.pingUrl)
                 } else {
                     val exitPort = when (cfg.exitNodeMode) {
-                        ExitNodeMode.CUSTOM_WG -> 10805
+                        ExitNodeMode.CUSTOM_WG -> ActiveProxyProvider.customWgPort ?: 10805
                         ExitNodeMode.CUSTOM_SOCKS5 -> 10806
                         ExitNodeMode.PSIPHON_POOL -> {
                             val psiphon = ActiveProxyProvider.psiphonProxyUrl

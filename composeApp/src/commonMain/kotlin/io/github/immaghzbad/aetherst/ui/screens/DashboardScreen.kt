@@ -306,7 +306,7 @@ fun DashboardScreen(
                         config = config,
                         connectionStatus = connectionStatus,
                         onClick = { showRoutingModal = true },
-                        enabled = connectionStatus == ConnectionStatus.STOPPED || connectionStatus == ConnectionStatus.ERROR,
+                        enabled = true,
                         scaleFactor = scaleFactor
                     )
                 }

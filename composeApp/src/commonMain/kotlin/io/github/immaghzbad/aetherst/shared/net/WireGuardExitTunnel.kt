@@ -36,6 +36,7 @@ class WireGuardExitTunnel(
     private var tcpControlSocket: Socket? = null
     private var udpRelaySocket: DatagramSocket? = null
     private var relayDestAddress: InetSocketAddress? = null
+    private var isSocksUdpRelay = false
 
     private var serverSocket: ServerSocket? = null
     private var keepaliveThread: Thread? = null
@@ -73,73 +74,69 @@ class WireGuardExitTunnel(
             val endpointHost = endpointParts[0].trim()
             val endpointPort = endpointParts.getOrNull(1)?.toIntOrNull() ?: 51820
 
-            // 1. Establish SOCKS5 UDP ASSOCIATE with primary tunnel (Nested Routing)
-            val ctrl = Socket()
-            ctrl.tcpNoDelay = true
-            ctrl.connect(InetSocketAddress(primarySocksHost, primarySocksPort), 5000)
-            tcpControlSocket = ctrl
+            // 1. Attempt SOCKS5 UDP ASSOCIATE with primary tunnel; fallback to direct UDP if unsupported
+            isSocksUdpRelay = false
+            var relayAddr: InetSocketAddress? = null
+            try {
+                val ctrl = Socket()
+                ctrl.tcpNoDelay = true
+                ctrl.connect(InetSocketAddress(primarySocksHost, primarySocksPort), 3000)
+                tcpControlSocket = ctrl
 
-            val cIn = ctrl.getInputStream()
-            val cOut = ctrl.getOutputStream()
+                val cIn = ctrl.getInputStream()
+                val cOut = ctrl.getOutputStream()
 
-            // SOCKS5 Handshake
-            cOut.write(byteArrayOf(0x05, 0x01, 0x00))
-            cOut.flush()
-            val authRes = ByteArray(2)
-            readExact(cIn, authRes)
-            if (authRes[1] != 0x00.toByte()) {
-                throw IllegalStateException("Primary tunnel SOCKS5 auth rejected")
+                // SOCKS5 Handshake
+                cOut.write(byteArrayOf(0x05, 0x01, 0x00))
+                cOut.flush()
+                val authRes = ByteArray(2)
+                readExact(cIn, authRes)
+
+                if (authRes[1] == 0x00.toByte()) {
+                    // UDP ASSOCIATE Request
+                    cOut.write(byteArrayOf(0x05, 0x03, 0x00, 0x01, 0, 0, 0, 0, 0, 0))
+                    cOut.flush()
+
+                    val assocRes = ByteArray(4)
+                    readExact(cIn, assocRes)
+                    if (assocRes[1] == 0x00.toByte()) {
+                        val relayIp = when (assocRes[3]) {
+                            0x01.toByte() -> {
+                                val addr = ByteArray(4)
+                                readExact(cIn, addr)
+                                InetAddress.getByAddress(addr)
+                            }
+                            0x04.toByte() -> {
+                                val addr = ByteArray(16)
+                                readExact(cIn, addr)
+                                InetAddress.getByAddress(addr)
+                            }
+                            else -> InetAddress.getByName(primarySocksHost)
+                        }
+                        val portBytes = ByteArray(2)
+                        readExact(cIn, portBytes)
+                        val relayPort = ((portBytes[0].toInt() and 0xFF) shl 8) or (portBytes[1].toInt() and 0xFF)
+                        relayAddr = InetSocketAddress(relayIp, relayPort)
+                        isSocksUdpRelay = true
+                        LogRepository.i("[WgExit] Nested SOCKS5 UDP relay negotiated at $relayAddr for endpoint $endpointHost:$endpointPort")
+                    } else {
+                        LogRepository.i("[WgExit] Primary SOCKS core does not support UDP ASSOCIATE (code ${assocRes[1]}). Using direct UDP socket.")
+                    }
+                }
+            } catch (e: Exception) {
+                LogRepository.w("[WgExit] SOCKS5 UDP associate attempt skipped: ${e.message}")
             }
 
-            // UDP ASSOCIATE Request
-            cOut.write(byteArrayOf(0x05, 0x03, 0x00, 0x01, 0, 0, 0, 0, 0, 0))
-            cOut.flush()
-
-            val assocRes = ByteArray(4)
-            readExact(cIn, assocRes)
-            if (assocRes[1] != 0x00.toByte()) {
-                val reason = when (assocRes[1].toInt()) {
-                    0x07 -> "Command not supported (Primary core does not support UDP ASSOCIATE)"
-                    0x02 -> "Connection not allowed by ruleset"
-                    0x03 -> "Network unreachable"
-                    0x04 -> "Host unreachable"
-                    0x05 -> "Connection refused"
-                    else -> "Error code ${assocRes[1]}"
-                }
-                LogRepository.e("[WgExit] Primary core rejected UDP ASSOCIATE: $reason. WireGuard requires UDP routing. Please use Psiphon or SOCKS5 exit node for secondary chaining.")
-                throw IllegalStateException("Primary core does not support UDP association: $reason")
-            }
-
-            // Read BND.ADDR and BND.PORT for the UDP relay
-            val relayIp = when (assocRes[3]) {
-                0x01.toByte() -> {
-                    val addr = ByteArray(4)
-                    readExact(cIn, addr)
-                    InetAddress.getByAddress(addr)
-                }
-                0x04.toByte() -> {
-                    val addr = ByteArray(16)
-                    readExact(cIn, addr)
-                    InetAddress.getByAddress(addr)
-                }
-                else -> InetAddress.getByName(primarySocksHost)
-            }
-            val portBytes = ByteArray(2)
-            readExact(cIn, portBytes)
-            val relayPort = ((portBytes[0].toInt() and 0xFF) shl 8) or (portBytes[1].toInt() and 0xFF)
-
-            val relayAddr = InetSocketAddress(relayIp, relayPort)
-            relayDestAddress = relayAddr
-
+            relayDestAddress = relayAddr ?: InetSocketAddress(endpointHost, endpointPort)
             val udpSock = DatagramSocket()
             udpRelaySocket = udpSock
 
-            LogRepository.i("[WgExit] Nested UDP relay established via primary tunnel at $relayAddr for endpoint $endpointHost:$endpointPort")
+            LogRepository.i("[WgExit] UDP transport ready for endpoint $endpointHost:$endpointPort (relayed=$isSocksUdpRelay)")
 
-            // 2. Start receiver thread for incoming WireGuard packets via SOCKS5 UDP relay
+            // 2. Start receiver thread for incoming WireGuard packets
             startReceiver(udpSock, endpointHost, endpointPort)
 
-            // 3. Perform WireGuard Handshake through the primary tunnel
+            // 3. Perform WireGuard Handshake
             performHandshake(endpointHost, endpointPort)
 
             // 4. Start keepalive loop
@@ -166,17 +163,21 @@ class WireGuardExitTunnel(
                     // Unpack SOCKS5 UDP header
                     // Header: RSV(2) + FRAG(1) + ATYP(1) + ADDR(?) + PORT(2) + DATA
                     val len = packet.length
-                    if (len < 10) continue
                     val data = packet.data
-                    val atyp = data[3]
-                    val headerLen = when (atyp) {
-                        0x01.toByte() -> 10 // IPv4
-                        0x04.toByte() -> 22 // IPv6
-                        0x03.toByte() -> 7 + (data[4].toInt() and 0xFF) // Domain
-                        else -> 10
+                    val payload = if (isSocksUdpRelay) {
+                        if (len < 10) continue
+                        val atyp = data[3]
+                        val headerLen = when (atyp) {
+                            0x01.toByte() -> 10 // IPv4
+                            0x04.toByte() -> 22 // IPv6
+                            0x03.toByte() -> 7 + (data[4].toInt() and 0xFF) // Domain
+                            else -> 10
+                        }
+                        if (len <= headerLen) continue
+                        data.copyOfRange(headerLen, len)
+                    } else {
+                        data.copyOfRange(0, len)
                     }
-                    if (len <= headerLen) continue
-                    val payload = data.copyOfRange(headerLen, len)
                     handleWireGuardPacket(payload)
                 } catch (_: Exception) {
                     break
@@ -236,26 +237,31 @@ class WireGuardExitTunnel(
     }
 
     private fun sendUdpThroughRelay(payload: ByteArray, destHost: String, destPort: Int) {
-        val relayDest = relayDestAddress ?: return
         val udpSock = udpRelaySocket ?: return
+        val relayDest = relayDestAddress ?: InetSocketAddress(destHost, destPort)
 
-        val hostBytes = destHost.toByteArray(Charsets.UTF_8)
-        val socksHeader = ByteArray(7 + hostBytes.size)
-        socksHeader[0] = 0x00 // RSV
-        socksHeader[1] = 0x00
-        socksHeader[2] = 0x00 // FRAG
-        socksHeader[3] = 0x03 // DOMAIN
-        socksHeader[4] = hostBytes.size.toByte()
-        System.arraycopy(hostBytes, 0, socksHeader, 5, hostBytes.size)
-        socksHeader[5 + hostBytes.size] = (destPort shr 8).toByte()
-        socksHeader[6 + hostBytes.size] = (destPort and 0xFF).toByte()
+        if (isSocksUdpRelay) {
+            val hostBytes = destHost.toByteArray(Charsets.UTF_8)
+            val socksHeader = ByteArray(7 + hostBytes.size)
+            socksHeader[0] = 0x00 // RSV
+            socksHeader[1] = 0x00
+            socksHeader[2] = 0x00 // FRAG
+            socksHeader[3] = 0x03 // DOMAIN
+            socksHeader[4] = hostBytes.size.toByte()
+            System.arraycopy(hostBytes, 0, socksHeader, 5, hostBytes.size)
+            socksHeader[5 + hostBytes.size] = (destPort shr 8).toByte()
+            socksHeader[6 + hostBytes.size] = (destPort and 0xFF).toByte()
 
-        val fullPacket = ByteArray(socksHeader.size + payload.size)
-        System.arraycopy(socksHeader, 0, fullPacket, 0, socksHeader.size)
-        System.arraycopy(payload, 0, fullPacket, socksHeader.size, payload.size)
+            val fullPacket = ByteArray(socksHeader.size + payload.size)
+            System.arraycopy(socksHeader, 0, fullPacket, 0, socksHeader.size)
+            System.arraycopy(payload, 0, fullPacket, socksHeader.size, payload.size)
 
-        val packet = DatagramPacket(fullPacket, fullPacket.size, relayDest)
-        runCatching { udpSock.send(packet) }
+            val packet = DatagramPacket(fullPacket, fullPacket.size, relayDest)
+            runCatching { udpSock.send(packet) }
+        } else {
+            val packet = DatagramPacket(payload, payload.size, relayDest)
+            runCatching { udpSock.send(packet) }
+        }
     }
 
     private fun startKeepalive(endpointHost: String, endpointPort: Int) {

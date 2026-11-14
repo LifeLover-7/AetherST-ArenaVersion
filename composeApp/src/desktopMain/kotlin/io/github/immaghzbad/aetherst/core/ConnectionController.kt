@@ -272,14 +272,17 @@ actual object ConnectionController {
                     if (started) {
                         wgExitTunnel = tunnel
                         effectiveTargetPort = 10805
+                        ActiveProxyProvider.customWgPort = 10805
                         LogRepository.i("[Controller] Custom WireGuard Exit ready on port 10805", "WireGuard")
                     } else {
-                        LogRepository.e("[Controller] Custom WireGuard start failed", "WireGuard")
-                        throw IllegalStateException("Custom WireGuard exit failed to establish connection")
+                        LogRepository.w("[Controller] Custom WireGuard start failed, keeping primary tunnel on port $coreSocksPort", "WireGuard")
+                        effectiveTargetPort = coreSocksPort
+                        ActiveProxyProvider.customWgPort = coreSocksPort
                     }
                 } else {
-                    LogRepository.e("[Controller] Custom WireGuard config is invalid or incomplete", "WireGuard")
-                    throw IllegalStateException("Invalid Custom WireGuard configuration")
+                    LogRepository.w("[Controller] Custom WireGuard config is incomplete, falling back to primary tunnel on port $coreSocksPort", "WireGuard")
+                    effectiveTargetPort = coreSocksPort
+                    ActiveProxyProvider.customWgPort = coreSocksPort
                 }
             } else if (effectiveConfig.exitNodeMode == ExitNodeMode.CUSTOM_SOCKS5 && effectiveConfig.customSocks5Host.isNotBlank()) {
                 val relay = io.github.immaghzbad.aetherst.shared.net.CustomSocks5Relay(
@@ -297,8 +300,8 @@ actual object ConnectionController {
                     effectiveTargetPort = 10806
                     LogRepository.i("[Controller] Custom SOCKS5 Exit ready on port 10806", "SOCKS5")
                 } else {
-                    LogRepository.e("[Controller] Custom SOCKS5 relay start failed", "SOCKS5")
-                    throw IllegalStateException("Custom SOCKS5 exit failed to connect")
+                    LogRepository.w("[Controller] Custom SOCKS5 relay start failed, falling back to primary tunnel on port $coreSocksPort", "SOCKS5")
+                    effectiveTargetPort = coreSocksPort
                 }
             }
 
@@ -504,6 +507,7 @@ actual object ConnectionController {
             try { CloakController.stop() } catch (_: Throwable) {}
 
             ActiveProxyProvider.psiphonProxyUrl = null
+            ActiveProxyProvider.customWgPort = null
             isPsiphonActive = false
 
             try { getSystemUtils(context).clearSystemProxy() } catch (_: Throwable) {}
