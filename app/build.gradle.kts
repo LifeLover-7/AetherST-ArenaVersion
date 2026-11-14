@@ -9,12 +9,12 @@ plugins {
 
 android {
   namespace = "io.github.immaghzbad.aetherst"
-  compileSdk = 36
+  compileSdk = 35
 
   defaultConfig {
     applicationId = "io.github.immaghzbad.aetherst"
     minSdk = 26
-    targetSdk = 36
+    targetSdk = 35
     versionCode = 21
     versionName = "2.1.0"
 
@@ -37,14 +37,20 @@ android {
 
   signingConfigs {
     create("release") {
-      storeFile = if (System.getenv("KEYSTORE_FILE") != null) file(System.getenv("KEYSTORE_FILE")) else file("$rootDir/app/src/main/release.jks")
-      storePassword = System.getenv("KEYSTORE_PASSWORD") ?: "aether_password"
-      keyAlias = System.getenv("KEY_ALIAS") ?: "aether_key"
-      keyPassword = System.getenv("KEY_PASSWORD") ?: "aether_password"
+      val envKeystore = System.getenv("KEYSTORE_FILE")
+      storeFile = when {
+        envKeystore != null && file(envKeystore).exists() -> file(envKeystore)
+        envKeystore != null && rootProject.file(envKeystore).exists() -> rootProject.file(envKeystore)
+        file("src/main/release.jks").exists() -> file("src/main/release.jks")
+        else -> rootProject.file("app/src/main/release.jks")
+      }
+      storePassword = System.getenv("KEYSTORE_PASSWORD") ?: "aether123456"
+      keyAlias = System.getenv("KEY_ALIAS") ?: "aetherst"
+      keyPassword = System.getenv("KEY_PASSWORD") ?: "aether123456"
       enableV1Signing = true
       enableV2Signing = true
       enableV3Signing = true
-      enableV4Signing = true
+      enableV4Signing = false
     }
   }
 
@@ -64,7 +70,7 @@ android {
       isEnable = true
       reset()
       include("arm64-v8a")
-      isUniversalApk = false
+      isUniversalApk = true
     }
   }
 

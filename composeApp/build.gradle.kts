@@ -69,7 +69,7 @@ kotlin {
 if (!isAndroidDisabled) {
     extensions.configure<LibraryExtension>("android") {
         namespace = "io.github.immaghzbad.aetherst.shared"
-        compileSdk = 36
+        compileSdk = 35
         defaultConfig {
             minSdk = 26
         }
