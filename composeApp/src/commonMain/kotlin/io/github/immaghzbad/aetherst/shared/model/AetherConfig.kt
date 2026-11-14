@@ -125,6 +125,7 @@ enum class TorMode(val rawValue: String, val displayName: String) {
 @Serializable
 enum class IpInfoProvider(val rawValue: String, val displayName: String) {
     AUTO("auto", "Auto"),
+    CLOUDFLARE("cloudflare", "Cloudflare Trace"),
     IPSB("ipsb", "ip.sb"),
     IPWHOIS("ipwhois", "ipwho.is"),
     FREEIPAPI("freeipapi", "freeipapi.com"),

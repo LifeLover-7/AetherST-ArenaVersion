@@ -47,8 +47,8 @@ fun CustomSocks5Dialog(
             modifier = Modifier
                 .fillMaxWidth(0.92f)
                 .clip(RoundedCornerShape(24.dp))
-                .border(1.dp, Color.White.copy(alpha = 0.12f), RoundedCornerShape(24.dp)),
-            colors = CardDefaults.cardColors(containerColor = AppPalette.surfaceRaised),
+                .border(1.dp, Color(0xFF262C3D), RoundedCornerShape(24.dp)),
+            colors = CardDefaults.cardColors(containerColor = Color(0xFF0F1117)),
             shape = RoundedCornerShape(24.dp)
         ) {
             Column(

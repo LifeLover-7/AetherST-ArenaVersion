@@ -31,6 +31,7 @@ object IpInfoRepository {
     data class ExitCountry(val ip: String, val countryCode: String, val source: String)
 
     private val geoProviders = setOf(
+        IpInfoProvider.CLOUDFLARE,
         IpInfoProvider.IPSB,
         IpInfoProvider.IPWHOIS,
         IpInfoProvider.FREEIPAPI,
@@ -43,6 +44,7 @@ object IpInfoRepository {
     )
 
     private fun directSources(): List<Pair<IpInfoProvider, () -> IpInfo?>> = listOf(
+        IpInfoProvider.CLOUDFLARE to ::tryDirectCloudflare,
         IpInfoProvider.IPSB to ::tryDirectIpSb,
         IpInfoProvider.IPWHOIS to ::tryDirectIpWhoIs,
         IpInfoProvider.FREEIPAPI to ::tryDirectFreeIpApi,
@@ -56,6 +58,7 @@ object IpInfoRepository {
     )
 
     private fun proxySources(socksHost: String, socksPort: Int): List<Pair<IpInfoProvider, () -> IpInfo?>> = listOf(
+        IpInfoProvider.CLOUDFLARE to { tryViaProxyCloudflare(socksHost, socksPort) },
         IpInfoProvider.IPSB to { tryViaProxyIpSb(socksHost, socksPort) },
         IpInfoProvider.IPWHOIS to { tryViaProxyIpWhoIs(socksHost, socksPort) },
         IpInfoProvider.FREEIPAPI to { tryViaProxyFreeIpApi(socksHost, socksPort) },
@@ -184,10 +187,10 @@ object IpInfoRepository {
             }
         }
         var fallbackResult: IpInfo? = null
-        val deadline = System.currentTimeMillis() + 8000L
+        val deadline = System.currentTimeMillis() + 10000L
         try {
             while (System.currentTimeMillis() < deadline) {
-                val candidate = withTimeoutOrNull(2000L) { channel.receiveCatching().getOrNull() } ?: continue
+                val candidate = withTimeoutOrNull(3000L) { channel.receiveCatching().getOrNull() } ?: continue
                 if (candidate.countryCode.isNotEmpty() || provider != IpInfoProvider.AUTO) {
                     jobs.forEach { it.cancel() }
                     return@coroutineScope candidate
@@ -216,10 +219,10 @@ object IpInfoRepository {
             }
         }
         var fallbackResult: IpInfo? = null
-        val deadline = System.currentTimeMillis() + 8000L
+        val deadline = System.currentTimeMillis() + 10000L
         try {
             while (System.currentTimeMillis() < deadline) {
-                val candidate = withTimeoutOrNull(2000L) { channel.receiveCatching().getOrNull() } ?: continue
+                val candidate = withTimeoutOrNull(3000L) { channel.receiveCatching().getOrNull() } ?: continue
                 if (candidate.countryCode.isNotEmpty() || provider != IpInfoProvider.AUTO) {
                     jobs.forEach { it.cancel() }
                     return@coroutineScope candidate
@@ -260,6 +263,80 @@ object IpInfoRepository {
             }
         } catch (_: Throwable) {
             info
+        }
+    }
+
+    private fun tryViaProxyCloudflare(socksHost: String, socksPort: Int): IpInfo? {
+        return try {
+            val proxy = Proxy(Proxy.Type.SOCKS, InetSocketAddress(socksHost, socksPort))
+            val client = NetworkClient.instance.newBuilder()
+                .proxy(proxy)
+                .connectTimeout(5000, java.util.concurrent.TimeUnit.MILLISECONDS)
+                .readTimeout(5000, java.util.concurrent.TimeUnit.MILLISECONDS)
+                .build()
+
+            val request = Request.Builder()
+                .url("https://www.cloudflare.com/cdn-cgi/trace")
+                .header("User-Agent", "Mozilla/5.0")
+                .build()
+
+            client.newCall(request).execute().use { response ->
+                if (response.isSuccessful) {
+                    val body = response.body?.string() ?: return null
+                    var ip = ""
+                    var loc = ""
+                    body.lineSequence().forEach { line ->
+                        if (line.startsWith("ip=")) ip = line.substringAfter("ip=").trim()
+                        if (line.startsWith("loc=")) loc = line.substringAfter("loc=").trim().uppercase()
+                    }
+                    if (ip.isNotEmpty()) {
+                        val countryName = runCatching {
+                            java.util.Locale("", loc).displayCountry.takeIf { it.isNotBlank() }
+                        }.getOrNull() ?: loc.ifEmpty { "Unknown" }
+                        LogRepository.i("Geo-data (Cloudflare): $ip ($countryName) [$loc]", "IpWhois")
+                        IpInfo(ip, countryName, loc, getFlagEmoji(loc), false)
+                    } else null
+                } else null
+            }
+        } catch (e: Throwable) {
+            LogRepository.w("Cloudflare trace via SOCKS error: ${e.message}", "IpWhois")
+            null
+        }
+    }
+
+    private fun tryDirectCloudflare(): IpInfo? {
+        return try {
+            val client = NetworkClient.instance.newBuilder()
+                .connectTimeout(4000, java.util.concurrent.TimeUnit.MILLISECONDS)
+                .readTimeout(4000, java.util.concurrent.TimeUnit.MILLISECONDS)
+                .build()
+
+            val request = Request.Builder()
+                .url("https://www.cloudflare.com/cdn-cgi/trace")
+                .header("User-Agent", "Mozilla/5.0")
+                .build()
+
+            client.newCall(request).execute().use { response ->
+                if (response.isSuccessful) {
+                    val body = response.body?.string() ?: return null
+                    var ip = ""
+                    var loc = ""
+                    body.lineSequence().forEach { line ->
+                        if (line.startsWith("ip=")) ip = line.substringAfter("ip=").trim()
+                        if (line.startsWith("loc=")) loc = line.substringAfter("loc=").trim().uppercase()
+                    }
+                    if (ip.isNotEmpty()) {
+                        val countryName = runCatching {
+                            java.util.Locale("", loc).displayCountry.takeIf { it.isNotBlank() }
+                        }.getOrNull() ?: loc.ifEmpty { "Unknown" }
+                        LogRepository.i("Direct Geo-data (Cloudflare): $ip ($countryName) [$loc]", "IpWhois")
+                        IpInfo(ip, countryName, loc, getFlagEmoji(loc), false)
+                    } else null
+                } else null
+            }
+        } catch (e: Throwable) {
+            LogRepository.w("Direct Cloudflare trace error: ${e.message}", "IpWhois")
+            null
         }
     }
 

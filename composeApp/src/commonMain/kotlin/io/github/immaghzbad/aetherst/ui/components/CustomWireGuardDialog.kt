@@ -1,5 +1,6 @@
 package io.github.immaghzbad.aetherst.shared.ui.components
 
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -76,8 +77,8 @@ fun CustomWireGuardDialog(
                 .fillMaxWidth(0.94f)
                 .fillMaxHeight(0.90f)
                 .clip(RoundedCornerShape(24.dp))
-                .border(1.dp, Color.White.copy(alpha = 0.12f), RoundedCornerShape(24.dp)),
-            colors = CardDefaults.cardColors(containerColor = AppPalette.surfaceRaised),
+                .border(1.dp, Color(0xFF262C3D), RoundedCornerShape(24.dp)),
+            colors = CardDefaults.cardColors(containerColor = Color(0xFF0F1117)),
             shape = RoundedCornerShape(24.dp)
         ) {
             Column(
@@ -274,21 +275,23 @@ fun CustomWireGuardDialog(
                         ),
                         shape = RoundedCornerShape(12.dp),
                         colors = OutlinedTextFieldDefaults.colors(
-                            focusedBorderColor = AppPalette.accent,
-                            unfocusedBorderColor = Color.White.copy(alpha = 0.15f),
-                            focusedContainerColor = AppPalette.divider,
-                            unfocusedContainerColor = AppPalette.divider
+                            focusedBorderColor = Color(0xFF38BDF8),
+                            unfocusedBorderColor = Color(0xFF262C3D),
+                            focusedContainerColor = Color(0xFF141721),
+                            unfocusedContainerColor = Color(0xFF141721),
+                            focusedTextColor = Color.White,
+                            unfocusedTextColor = Color.White
                         )
                     )
 
                     Spacer(modifier = Modifier.height(14.dp))
 
-                    // Parsed Summary Card
+                    // Parsed Summary Card - Solid dark high-contrast
                     Card(
                         modifier = Modifier.fillMaxWidth(),
                         shape = RoundedCornerShape(14.dp),
-                        colors = CardDefaults.cardColors(containerColor = AppPalette.divider.copy(alpha = 0.5f)),
-                        border = CardDefaults.outlinedCardBorder().copy(brush = SolidColor(Color.White.copy(alpha = 0.08f)))
+                        colors = CardDefaults.cardColors(containerColor = Color(0xFF141721)),
+                        border = BorderStroke(1.dp, Color(0xFF262C3D))
                     ) {
                         Column(modifier = Modifier.padding(14.dp)) {
                             Row(
@@ -419,11 +422,11 @@ private fun ConfigSummaryRow(label: String, value: String) {
         horizontalArrangement = Arrangement.SpaceBetween,
         verticalAlignment = Alignment.CenterVertically
     ) {
-        Text(text = label, color = AppPalette.textSecondary, fontSize = 11.sp)
+        Text(text = label, color = Color(0xFF94A3B8), fontSize = 11.sp, fontWeight = FontWeight.Medium)
         Text(
             text = value,
             color = Color.White,
-            fontWeight = FontWeight.Medium,
+            fontWeight = FontWeight.SemiBold,
             fontSize = 11.sp,
             fontFamily = FontFamily.Monospace
         )

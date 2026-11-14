@@ -29,9 +29,8 @@ object PsiphonController {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
     fun isSupported(config: AetherConfig): Boolean {
-        return config.psiphonEnabled ||
-                config.exitNodeMode == ExitNodeMode.PSIPHON_POOL ||
-                config.chainProvider == ChainProvider.PSIPHON
+        return config.exitNodeMode == ExitNodeMode.PSIPHON_POOL ||
+                (config.exitNodeMode == ExitNodeMode.DIRECT && config.psiphonEnabled && config.chainProvider == ChainProvider.PSIPHON)
     }
 
     fun getPort(): Int = psiphonPort

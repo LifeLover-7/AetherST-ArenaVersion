@@ -217,13 +217,28 @@ class CustomSocks5Relay(
             if (remReply[1] != 0x00.toByte()) return
 
             // 7. Bidirectional data pipe
-            val t1 = Thread({ pipeStream(clientIn, primOut) }, "Aether-SocksRelay-C2P").apply { isDaemon = true }
-            val t2 = Thread({ pipeStream(primIn, clientOut) }, "Aether-SocksRelay-P2C").apply { isDaemon = true }
+            val doneLatch = java.util.concurrent.CountDownLatch(1)
+            val t1 = Thread({
+                try {
+                    pipeStream(clientIn, primOut)
+                } finally {
+                    runCatching { primarySocket?.shutdownOutput() }
+                    doneLatch.countDown()
+                }
+            }, "Aether-SocksRelay-C2P").apply { isDaemon = true }
+
+            val t2 = Thread({
+                try {
+                    pipeStream(primIn, clientOut)
+                } finally {
+                    runCatching { clientSocket.shutdownOutput() }
+                    doneLatch.countDown()
+                }
+            }, "Aether-SocksRelay-P2C").apply { isDaemon = true }
+
             t1.start()
             t2.start()
-
-            t1.join(300000)
-            t2.join(300000)
+            doneLatch.await(60, TimeUnit.SECONDS)
         } catch (_: Exception) {
         } finally {
             runCatching { primarySocket?.close() }
