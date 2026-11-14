@@ -72,15 +72,23 @@ fun CustomWireGuardDialog(
         onDismissRequest = onDismiss,
         properties = DialogProperties(usePlatformDefaultWidth = false)
     ) {
-        Card(
+        Box(
             modifier = Modifier
-                .fillMaxWidth(0.94f)
-                .fillMaxHeight(0.90f)
-                .clip(RoundedCornerShape(24.dp))
-                .border(1.dp, Color(0xFF262C3D), RoundedCornerShape(24.dp)),
-            colors = CardDefaults.cardColors(containerColor = Color(0xFF0F1117)),
-            shape = RoundedCornerShape(24.dp)
+                .fillMaxSize()
+                .background(Color.Black.copy(alpha = 0.85f))
+                .clickable(enabled = false) {},
+            contentAlignment = Alignment.Center
         ) {
+            Card(
+                modifier = Modifier
+                    .fillMaxWidth(0.94f)
+                    .fillMaxHeight(0.90f)
+                    .clip(RoundedCornerShape(24.dp))
+                    .background(Color(0xFF0F1117))
+                    .border(1.dp, Color(0xFF262C3D), RoundedCornerShape(24.dp)),
+                colors = CardDefaults.cardColors(containerColor = Color(0xFF0F1117)),
+                shape = RoundedCornerShape(24.dp)
+            ) {
             Column(
                 modifier = Modifier
                     .fillMaxSize()
@@ -290,8 +298,8 @@ fun CustomWireGuardDialog(
                     Card(
                         modifier = Modifier.fillMaxWidth(),
                         shape = RoundedCornerShape(14.dp),
-                        colors = CardDefaults.cardColors(containerColor = Color(0xFF141721)),
-                        border = BorderStroke(1.dp, Color(0xFF262C3D))
+                        colors = CardDefaults.cardColors(containerColor = Color(0xFF161B26)),
+                        border = BorderStroke(1.dp, Color(0xFF2E384D))
                     ) {
                         Column(modifier = Modifier.padding(14.dp)) {
                             Row(
@@ -374,6 +382,7 @@ fun CustomWireGuardDialog(
             }
         }
     }
+    }
 
     // Advisory dialog when primary tunnel is not connected
     if (showTunnelAdvisoryDialog) {
@@ -418,16 +427,16 @@ private fun ConfigSummaryRow(label: String, value: String) {
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(vertical = 3.dp),
+            .padding(vertical = 4.dp),
         horizontalArrangement = Arrangement.SpaceBetween,
         verticalAlignment = Alignment.CenterVertically
     ) {
-        Text(text = label, color = Color(0xFF94A3B8), fontSize = 11.sp, fontWeight = FontWeight.Medium)
+        Text(text = label, color = Color(0xFFCBD5E1), fontSize = 12.sp, fontWeight = FontWeight.Medium)
         Text(
             text = value,
             color = Color.White,
-            fontWeight = FontWeight.SemiBold,
-            fontSize = 11.sp,
+            fontWeight = FontWeight.Bold,
+            fontSize = 12.sp,
             fontFamily = FontFamily.Monospace
         )
     }

@@ -77,13 +77,13 @@ class WireGuardExitTunnel(
 
             // 1. Generate dedicated Aether WireGuard identity toml
             val tomlContent = buildString {
-                appendLine("device_id = \"custom-wireguard\"")
-                appendLine("access_token = \"none\"")
+                appendLine("device_id = \"${java.util.UUID.randomUUID()}\"")
+                appendLine("access_token = \"${java.util.UUID.randomUUID()}\"")
                 appendLine("cert_pem = \"\"")
                 appendLine("key_pem = \"\"")
                 appendLine("cert_issued_at = 0")
                 appendLine("ipv4 = \"$v4\"")
-                if (v6.isNotBlank()) appendLine("ipv6 = \"$v6\"")
+                appendLine("ipv6 = \"$v6\"")
                 appendLine("wg_private_key = \"${config.privateKey.trim()}\"")
                 appendLine("wg_peer_public_key = \"${config.publicKey.trim()}\"")
                 appendLine("client_id = \"ta17\"")
@@ -113,8 +113,10 @@ class WireGuardExitTunnel(
                     bin,
                     "--bind", "127.0.0.1:$localListenPort",
                     "--config", tFile.absolutePath,
+                    "--wg-config", tFile.absolutePath,
                     "--wg",
                     "--peer", "$endpointHost:$endpointPort",
+                    "--upstream", "socks5://$primarySocksHost:$primarySocksPort",
                     "--no-profile-retry",
                     "--no-quick-reconnect",
                     "--no-data-check",
@@ -122,10 +124,18 @@ class WireGuardExitTunnel(
                 )
                 if (v6.isNotBlank()) cmd.add("--dual") else cmd.add("-4")
 
-                LogRepository.i("[WgExit] Starting native WireGuard core on 127.0.0.1:$localListenPort for $endpointHost:$endpointPort", "WgExit")
+                LogRepository.i("[WgExit] Starting native WireGuard core on 127.0.0.1:$localListenPort chaining via socks5://$primarySocksHost:$primarySocksPort", "WgExit")
                 val pb = ProcessBuilder(cmd)
                 pb.directory(workDir)
                 pb.redirectErrorStream(true)
+                val env = pb.environment()
+                env["AETHER_PROTOCOL"] = "wg"
+                env["AETHER_UPSTREAM"] = "socks5://$primarySocksHost:$primarySocksPort"
+                env["AETHER_SOCKS"] = "127.0.0.1:$localListenPort"
+                env["AETHER_CONFIG"] = tFile.absolutePath
+                env["AETHER_WG_CONFIG"] = tFile.absolutePath
+                env["AETHER_PEER"] = "$endpointHost:$endpointPort"
+                env["AETHER_NOIZE"] = "balanced"
                 val proc = pb.start()
                 process = proc
 
@@ -141,10 +151,10 @@ class WireGuardExitTunnel(
                     }
                 }, "Aether-WgExit-Logger").apply { isDaemon = true; start() }
 
-                // Wait up to 6 seconds for port to become active
+                // Wait up to 10 seconds for port to become active
                 var portReady = false
                 val startWait = System.currentTimeMillis()
-                while (System.currentTimeMillis() - startWait < 6000) {
+                while (System.currentTimeMillis() - startWait < 10000) {
                     if (isPortListening("127.0.0.1", localListenPort)) {
                         portReady = true
                         break
@@ -156,15 +166,15 @@ class WireGuardExitTunnel(
                     LogRepository.i("[WgExit] WireGuard SOCKS5 active on 127.0.0.1:$localListenPort", "WgExit")
                     return true
                 } else {
-                    LogRepository.w("[WgExit] WireGuard process launched but port $localListenPort not ready, activating fallback relay", "WgExit")
+                    LogRepository.w("[WgExit] WireGuard process launched but port $localListenPort not ready", "WgExit")
+                    stop()
+                    return false
                 }
             } else {
                 LogRepository.w("[WgExit] Core binary path not found; using fallback SOCKS5 relay", "WgExit")
+                startFallbackRelay()
+                return true
             }
-
-            // Fallback: Start local SOCKS5 relay to primary tunnel so user never loses internet
-            startFallbackRelay()
-            true
         } catch (e: Exception) {
             LogRepository.e("[WgExit] Startup failed: ${e.message}", "WgExit")
             stop()
