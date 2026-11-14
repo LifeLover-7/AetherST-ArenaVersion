@@ -61,7 +61,7 @@ A specialized nested WireGuard configuration. By wrapping one WireGuard tunnel i
 Enterprise-grade security for individuals and organizations. It allows you to route your traffic through Cloudflare's global network using Gateway filtering and Service Tokens, ensuring zero-trust access control.
 
 ### 🔗 Psiphon Chain
-An optional second layer built on the open-source Psiphon tunnel core. It routes traffic via Psiphon to obtain a non-Iran exit IP and can chain over MASQUE, WireGuard, or Gool. Chain modes include Auto, Fallback, and Always, with a selectable egress region and local endpoints on `127.0.0.1:3080` (SOCKS) and `127.0.0.1:1820` (HTTP).
+An optional second layer built on the open-source Psiphon tunnel core. It routes traffic via Psiphon to obtain a non-Iran exit IP and can chain over MASQUE, WireGuard, or Gool. Chain modes include Auto, Fallback, and Always, with a selectable egress region and local endpoints on `127.0.0.1:3080` (SOCKS) and `127.0.0.1:2020` (HTTP).
 
 ### 🧅 Tor Chain (Android, Aether Core v2.0.0)
 An optional second layer using the Tor implementation built into the Aether core — no separate Tor app or manual bridge setup required.

@@ -15,14 +15,14 @@ import java.util.concurrent.atomic.AtomicBoolean
 
 /**
  * Modular Chained SOCKS5 Relay.
- * Bridges hev-socks5-tunnel through the primary tunnel (127.0.0.1:1819) to any
+ * Bridges hev-socks5-tunnel through the primary tunnel (127.0.0.1:2021) to any
  * custom external SOCKS5 proxy server without adding any third-party dependencies.
  */
 class CustomSocks5Relay(
     private val listenHost: String = "127.0.0.1",
     val listenPort: Int = 10806,
     private val primarySocksHost: String = "127.0.0.1",
-    private val primarySocksPort: Int = 1819,
+    private val primarySocksPort: Int = 2021,
     private val remoteHost: String,
     private val remotePort: Int,
     private val username: String = "",
@@ -124,7 +124,7 @@ class CustomSocks5Relay(
             val portBytes = ByteArray(2)
             readExact(clientIn, portBytes)
 
-            // 3. Connect to primary tunnel SOCKS5 (127.0.0.1:1819)
+            // 3. Connect to primary tunnel SOCKS5 (127.0.0.1:2021)
             primarySocket = Socket()
             primarySocket.tcpNoDelay = true
             primarySocket.connect(InetSocketAddress(primarySocksHost, primarySocksPort), 5000)

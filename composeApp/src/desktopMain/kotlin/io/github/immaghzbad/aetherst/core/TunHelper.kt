@@ -22,7 +22,7 @@ object TunHelper {
 
     private val isRunning = AtomicBoolean(false)
     private var tailThread: Thread? = null
-    @Volatile private var targetSocksPort = 1819
+    @Volatile private var targetSocksPort = 2021
 
     fun start(
         socksTargetPort: Int,

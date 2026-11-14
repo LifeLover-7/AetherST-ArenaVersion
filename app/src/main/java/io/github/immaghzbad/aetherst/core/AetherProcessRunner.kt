@@ -50,7 +50,7 @@ class AetherProcessRunner(private val context: Context) {
     private val currentAttemptId = AtomicLong(0)
     private var goolOuterValidated = false
     private var dataPlaneOk = false
-    private var lastBindAddress: String = "127.0.0.1:1819"
+    private var lastBindAddress: String = "127.0.0.1:2021"
     private val isReconnecting = AtomicBoolean(false)
 
     private val _connectionStatus = MutableStateFlow(ConnectionStatus.STOPPED)

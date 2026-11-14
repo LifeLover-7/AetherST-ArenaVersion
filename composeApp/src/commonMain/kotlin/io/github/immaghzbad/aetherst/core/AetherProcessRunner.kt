@@ -21,7 +21,7 @@ class AetherProcessRunner(private val context: PlatformContext) {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
     private val currentAttemptId = AtomicLong(0)
     private var goolOuterValidated = false
-    private var lastBindAddress: String = "127.0.0.1:1819"
+    private var lastBindAddress: String = "127.0.0.1:2021"
 
     private val _connectionStatus = MutableStateFlow(ConnectionStatus.STOPPED)
     val connectionStatus: StateFlow<ConnectionStatus> = _connectionStatus.asStateFlow()
@@ -96,7 +96,7 @@ class AetherProcessRunner(private val context: PlatformContext) {
             command.add(config.noise.rawValue)
 
             val httpBindHost = bindAddress.substringBefore(':')
-            val actualHttpPort = config.httpPort.ifBlank { "1820" }
+            val actualHttpPort = config.httpPort.ifBlank { "2020" }
             if (config.httpProxyEnabled) {
                 command.add("--http-proxy")
                 command.add("$httpBindHost:$actualHttpPort")

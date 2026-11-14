@@ -83,7 +83,7 @@ class SocksTunBridge(
     private val vpnService: VpnService,
     private val tunDescriptor: ParcelFileDescriptor,
     @Volatile private var socksHost: String = "127.0.0.1",
-    @Volatile private var socksPort: Int = 1819,
+    @Volatile private var socksPort: Int = 2021,
     private val mtu: Int = 1280,
     private val blockedPackagesProvider: () -> Set<String>,
     private val routingEngine: RoutingEngine

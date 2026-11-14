@@ -165,7 +165,7 @@ fun main(args: Array<String> = emptyArray()) {
     var bound = false
     for (attempt in 0..7) {
         try {
-            val s = ServerSocket(18195)
+            val s = ServerSocket(20215)
             lockSocket = s
             SingleInstanceLock.socket = s
             bound = true
@@ -178,14 +178,14 @@ fun main(args: Array<String> = emptyArray()) {
     if (!bound) {
         try { io.github.immaghzbad.aetherst.shared.desktop.DesktopLogger.i("Main", "Another instance is running - signaling to show window and exiting") } catch (_: Throwable) {}
         runCatching {
-            java.net.Socket("127.0.0.1", 18195).use { socket ->
+            java.net.Socket("127.0.0.1", 20215).use { socket ->
                 socket.getOutputStream().write(1)
                 socket.getOutputStream().flush()
             }
         }
         exitProcess(0)
     }
-    try { io.github.immaghzbad.aetherst.shared.desktop.DesktopLogger.i("Main", "Single instance lock acquired on port 18195") } catch (_: Throwable) {}
+    try { io.github.immaghzbad.aetherst.shared.desktop.DesktopLogger.i("Main", "Single instance lock acquired on port 20215") } catch (_: Throwable) {}
 
     Thread({
         while (true) {
@@ -223,6 +223,7 @@ fun main(args: Array<String> = emptyArray()) {
 
     io.github.immaghzbad.aetherst.shared.platform.Bridge.pickFile = { onResult ->
         SwingUtilities.invokeLater {
+            var handled = false
             try {
                 val dialog = java.awt.FileDialog(null as java.awt.Frame?, "Select WireGuard Config (.conf)", java.awt.FileDialog.LOAD)
                 dialog.filenameFilter = java.io.FilenameFilter { _, name ->
@@ -235,13 +236,24 @@ fun main(args: Array<String> = emptyArray()) {
                     val selectedFile = File(dir, file)
                     if (selectedFile.exists() && selectedFile.canRead()) {
                         onResult(selectedFile.readText())
-                    } else {
-                        onResult(null)
+                        handled = true
                     }
-                } else {
-                    onResult(null)
                 }
-            } catch (_: Throwable) {
+            } catch (_: Throwable) {}
+
+            if (!handled) {
+                try {
+                    val chooser = javax.swing.JFileChooser()
+                    chooser.dialogTitle = "Select WireGuard Config (.conf)"
+                    chooser.fileFilter = javax.swing.filechooser.FileNameExtensionFilter("WireGuard Config (*.conf, *.txt)", "conf", "txt")
+                    val res = chooser.showOpenDialog(null)
+                    if (res == javax.swing.JFileChooser.APPROVE_OPTION && chooser.selectedFile != null) {
+                        onResult(chooser.selectedFile.readText())
+                        handled = true
+                    }
+                } catch (_: Throwable) {}
+            }
+            if (!handled) {
                 onResult(null)
             }
         }

@@ -29,7 +29,7 @@ object SpeedTestRepository {
     private var settings: io.github.immaghzbad.aetherst.platform.Settings? = null
 
     private var socksHost: String = "127.0.0.1"
-    private var socksPort: Int = 1819
+    private var socksPort: Int = 2021
     private var useProxy: Boolean = false
 
     private const val TAG = "SpeedTest"
@@ -69,7 +69,7 @@ object SpeedTestRepository {
     }
 
 
-    fun startTest(proxyHost: String = "127.0.0.1", proxyPort: Int = 1819, throughProxy: Boolean = false) {
+    fun startTest(proxyHost: String = "127.0.0.1", proxyPort: Int = 2021, throughProxy: Boolean = false) {
         if (testJob?.isActive == true) return
         if (!mutex.tryLock()) return
 
@@ -497,7 +497,7 @@ object SpeedTestRepository {
         return formatted.trimEnd('0').trimEnd('.')
     }
 
-    fun checkServerReachable(server: SpeedTestServer, config: SpeedTestConfig, proxyHost: String = "127.0.0.1", proxyPort: Int = 1819, throughProxy: Boolean = false): Boolean {
+    fun checkServerReachable(server: SpeedTestServer, config: SpeedTestConfig, proxyHost: String = "127.0.0.1", proxyPort: Int = 2021, throughProxy: Boolean = false): Boolean {
         return try {
             val url = resolveServerUrl(server, config)
             if (url.isBlank()) return false

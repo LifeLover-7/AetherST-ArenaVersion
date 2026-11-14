@@ -22,13 +22,13 @@ import java.util.concurrent.atomic.AtomicLong
 /**
  * Modular Secondary WireGuard Exit Tunnel with Nested SOCKS5-UDP Routing.
  * All UDP packets destined for the WireGuard Endpoint are routed through the primary
- * tunnel (MASQUE, GOOL, or WireGuard at 127.0.0.1:1819) via SOCKS5 UDP ASSOCIATE,
+ * tunnel (MASQUE, GOOL, or WireGuard at 127.0.0.1:2021) via SOCKS5 UDP ASSOCIATE,
  * ensuring the user's final public IP changes to the secondary WireGuard server.
  */
 class WireGuardExitTunnel(
     private val config: CustomWireGuardConfig,
     private val primarySocksHost: String = "127.0.0.1",
-    private val primarySocksPort: Int = 1819,
+    private val primarySocksPort: Int = 2021,
     val localListenPort: Int = 10805
 ) {
     private val isRunning = AtomicBoolean(false)
@@ -98,7 +98,16 @@ class WireGuardExitTunnel(
             val assocRes = ByteArray(4)
             readExact(cIn, assocRes)
             if (assocRes[1] != 0x00.toByte()) {
-                throw IllegalStateException("Primary tunnel UDP ASSOCIATE rejected (code ${assocRes[1]})")
+                val reason = when (assocRes[1].toInt()) {
+                    0x07 -> "Command not supported (Primary core does not support UDP ASSOCIATE)"
+                    0x02 -> "Connection not allowed by ruleset"
+                    0x03 -> "Network unreachable"
+                    0x04 -> "Host unreachable"
+                    0x05 -> "Connection refused"
+                    else -> "Error code ${assocRes[1]}"
+                }
+                LogRepository.e("[WgExit] Primary core rejected UDP ASSOCIATE: $reason. WireGuard requires UDP routing. Please use Psiphon or SOCKS5 exit node for secondary chaining.")
+                throw IllegalStateException("Primary core does not support UDP association: $reason")
             }
 
             // Read BND.ADDR and BND.PORT for the UDP relay

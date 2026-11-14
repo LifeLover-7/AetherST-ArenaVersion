@@ -16,7 +16,7 @@ class LocalDnsServer(
     private val listenHost: String = "127.0.0.1",
     private val listenPort: Int = 53,
     private val socksHost: String = "127.0.0.1",
-    private val socksPort: Int = 1819,
+    private val socksPort: Int = 2021,
     private val upstreamList: String = "1.1.1.1,1.0.0.1"
 ) {
     private val runningFlag = AtomicBoolean(false)

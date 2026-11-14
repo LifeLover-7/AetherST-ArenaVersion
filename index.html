@@ -759,7 +759,7 @@
                 <div class="space-y-10">
                     <div>
                         <h2 class="text-xl font-bold mb-4">What Aether Does</h2>
-                        <p class="text-gray-600 dark:text-gray-400 leading-relaxed mb-4">Aether is a user-space proxy client for Cloudflare WARP. It builds a tunnel out of a filtered network and exposes a local SOCKS5 proxy on <code class="font-mono text-sm bg-gray-100 dark:bg-gray-800 px-1.5 py-0.5 rounded">127.0.0.1:1819</code>. Point a browser, a terminal, or a system proxy at that address and the traffic leaves through the tunnel.</p>
+                        <p class="text-gray-600 dark:text-gray-400 leading-relaxed mb-4">Aether is a user-space proxy client for Cloudflare WARP. It builds a tunnel out of a filtered network and exposes a local SOCKS5 proxy on <code class="font-mono text-sm bg-gray-100 dark:bg-gray-800 px-1.5 py-0.5 rounded">127.0.0.1:2021</code>. Point a browser, a terminal, or a system proxy at that address and the traffic leaves through the tunnel.</p>
                         <p class="text-gray-600 dark:text-gray-400 leading-relaxed">It needs no root and installs no network driver. Everything happens inside the process: the tunnel, a user-space TCP/IP stack, and the proxy.</p>
                     </div>
 
@@ -774,7 +774,7 @@
                         <div class="mt-4 p-4 rounded-xl bg-green-50 dark:bg-green-950/30 border border-green-200 dark:border-green-800">
                             <p class="text-sm text-green-800 dark:text-green-300"><strong>Verify:</strong></p>
                             <div class="mt-2 p-3 rounded-lg bg-white dark:bg-gray-800 font-mono text-xs text-gray-700 dark:text-gray-300 overflow-x-auto">
-                                <code>curl -x socks5h://127.0.0.1:1819 https://www.cloudflare.com/cdn-cgi/trace</code>
+                                <code>curl -x socks5h://127.0.0.1:2021 https://www.cloudflare.com/cdn-cgi/trace</code>
                             </div>
                             <p class="text-sm text-green-800 dark:text-green-300 mt-2">Look for <code class="font-mono bg-green-100 dark:bg-green-900/50 px-1 rounded">warp=on</code> in the response.</p>
                         </div>
@@ -960,7 +960,7 @@
                             </div>
                             <div class="p-4 rounded-xl bg-gray-50 dark:bg-gray-900 border border-gray-200 dark:border-gray-800">
                                 <h3 class="font-semibold text-sm mb-2">Docker</h3>
-                                <div class="p-3 rounded-lg bg-white dark:bg-gray-800 font-mono text-xs text-gray-700 dark:text-gray-300 overflow-x-auto"><code>docker run -it -p 127.0.0.1:1819:1819 -v aether-data:/data \<br>&nbsp;&nbsp;-e AETHER_PROTOCOL=masque ghcr.io/cluvexstudio/aether:latest</code></div>
+                                <div class="p-3 rounded-lg bg-white dark:bg-gray-800 font-mono text-xs text-gray-700 dark:text-gray-300 overflow-x-auto"><code>docker run -it -p 127.0.0.1:2021:2021 -v aether-data:/data \<br>&nbsp;&nbsp;-e AETHER_PROTOCOL=masque ghcr.io/cluvexstudio/aether:latest</code></div>
                             </div>
                         </div>
                     </div>
@@ -1005,7 +1005,7 @@
                         </button>
                         <div class="config-content hidden mt-4 space-y-2">
                             <div class="grid sm:grid-cols-2 gap-2">
-                                <div class="p-3 rounded-xl bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700"><code class="text-xs font-mono text-blue-600 dark:text-blue-400">AETHER_SOCKS</code><p class="text-xs text-gray-500 dark:text-gray-400 mt-1">SOCKS5 address. Default: 127.0.0.1:1819</p></div>
+                                <div class="p-3 rounded-xl bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700"><code class="text-xs font-mono text-blue-600 dark:text-blue-400">AETHER_SOCKS</code><p class="text-xs text-gray-500 dark:text-gray-400 mt-1">SOCKS5 address. Default: 127.0.0.1:2021</p></div>
                                 <div class="p-3 rounded-xl bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700"><code class="text-xs font-mono text-blue-600 dark:text-blue-400">AETHER_HTTP_PROXY</code><p class="text-xs text-gray-500 dark:text-gray-400 mt-1">HTTP CONNECT address</p></div>
                                 <div class="p-3 rounded-xl bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700"><code class="text-xs font-mono text-blue-600 dark:text-blue-400">AETHER_PROTOCOL</code><p class="text-xs text-gray-500 dark:text-gray-400 mt-1">masque, wg, gool</p></div>
                                 <div class="p-3 rounded-xl bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700"><code class="text-xs font-mono text-blue-600 dark:text-blue-400">AETHER_SCAN</code><p class="text-xs text-gray-500 dark:text-gray-400 mt-1">turbo, balanced, thorough, stealth, ironclad</p></div>

@@ -69,7 +69,7 @@ object IpInfoRepository {
         IpInfoProvider.AMAZON to { tryViaProxyAmazon(socksHost, socksPort) }
     )
 
-    suspend fun fetchExitCountry(socksHost: String = "127.0.0.1", socksPort: Int = 1819, useProxy: Boolean = true): ExitCountry? = coroutineScope {
+    suspend fun fetchExitCountry(socksHost: String = "127.0.0.1", socksPort: Int = 2021, useProxy: Boolean = true): ExitCountry? = coroutineScope {
         val base = if (useProxy) proxySources(socksHost, socksPort) else directSources()
         val ordered = base.filter { geoProviders.contains(it.first) }.shuffled()
         if (ordered.isEmpty()) return@coroutineScope null
@@ -94,7 +94,7 @@ object IpInfoRepository {
         }
     }
 
-    suspend fun fetchIpInfo(socksHost: String = "127.0.0.1", socksPort: Int = 1819, useProxy: Boolean = true, provider: IpInfoProvider = IpInfoProvider.AUTO) {
+    suspend fun fetchIpInfo(socksHost: String = "127.0.0.1", socksPort: Int = 2021, useProxy: Boolean = true, provider: IpInfoProvider = IpInfoProvider.AUTO) {
         val oldJob = jobMutex.withLock {
             val job = activeFetchJob
             activeFetchJob = null

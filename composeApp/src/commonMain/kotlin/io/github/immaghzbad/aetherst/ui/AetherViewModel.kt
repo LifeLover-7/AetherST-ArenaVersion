@@ -670,7 +670,7 @@ class AetherViewModel(platformContext: PlatformContext) : ViewModel() {
                 if (!psiphon.isNullOrEmpty()) {
                     psiphon.removePrefix("socks5://").removePrefix("socks://").split(":").getOrNull(1)?.toIntOrNull() ?: 3080
                 } else {
-                    cfg.socksPort.toIntOrNull() ?: 1819
+                    cfg.socksPort.toIntOrNull() ?: 2021
                 }
             }
         }
@@ -706,7 +706,7 @@ class AetherViewModel(platformContext: PlatformContext) : ViewModel() {
                     val parts = body.split(":", limit = 2)
                     PingRepository.runPing(parts.first(), parts.getOrNull(1)?.toIntOrNull() ?: 3081, useProxy = true, pingUrl = cfg.pingUrl)
                 } else {
-                    PingRepository.runPing(cfg.socksHost, cfg.socksPort.toIntOrNull() ?: 1819, useProxy = true, pingUrl = cfg.pingUrl)
+                    PingRepository.runPing(cfg.socksHost, cfg.socksPort.toIntOrNull() ?: 2021, useProxy = true, pingUrl = cfg.pingUrl)
                 }
             } else {
                 PingRepository.reset()
@@ -769,7 +769,7 @@ class AetherViewModel(platformContext: PlatformContext) : ViewModel() {
                             port = parts.getOrNull(1)?.toIntOrNull() ?: 3081
                         } else {
                             host = cfg.socksHost
-                            port = cfg.socksPort.toIntOrNull() ?: 1819
+                            port = cfg.socksPort.toIntOrNull() ?: 2021
                         }
                         val pingUrl = cfg.pingUrl
                         viewModelScope.launch {

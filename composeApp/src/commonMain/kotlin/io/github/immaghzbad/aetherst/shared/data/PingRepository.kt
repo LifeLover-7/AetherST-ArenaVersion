@@ -34,7 +34,7 @@ object PingRepository {
             val result = withContext(Dispatchers.IO) {
                 val url = pingUrl.trim().ifEmpty { "https://www.gstatic.com/generate_204" }
                 val resolvedHost = socksHost.trim().ifEmpty { "127.0.0.1" }
-                val resolvedPort = if (socksPort in 1..65535) socksPort else 1819
+                val resolvedPort = if (socksPort in 1..65535) socksPort else 2021
                 val target = parseTarget(url)
                 val tcpMs = measureTcpConnect(target.host, target.port, resolvedHost, resolvedPort, useProxy)
                 if (tcpMs < 0) {

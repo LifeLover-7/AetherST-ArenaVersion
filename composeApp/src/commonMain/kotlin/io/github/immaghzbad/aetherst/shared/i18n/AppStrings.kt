@@ -866,6 +866,12 @@ interface AppStrings {
     val PROTON_CONFIG_SUCCESS: String
     val PROTON_DESKTOP_NOTICE: String
     val TOAST_PROTON_CONFIG_SUCCESS: String
+
+    val ROUTING_HUB_TITLE: String
+    val ROUTING_HUB_SUBTITLE: String
+    val ROUTING_PRIMARY_PROTOCOL: String
+    val ROUTING_EXIT_NODE: String
+    val ROUTING_CONNECTION_MODE: String
 }
 
 val LocalAppStrings = compositionLocalOf<AppStrings> { StringsEn }

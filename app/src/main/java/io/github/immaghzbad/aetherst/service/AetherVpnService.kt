@@ -391,21 +391,22 @@ class AetherVpnService : VpnService() {
                 }
                 ensureCurrentAttempt(attemptId)
 
-                // گام ۱.۵: راه‌اندازی استخر سایفون در صورت فعال بودن ExitNodeMode.PSIPHON_POOL
+                // گام ۱.۵: راه‌اندازی سایفون در صورت فعال بودن ExitNodeMode.PSIPHON_POOL
                 if (config.exitNodeMode == ExitNodeMode.PSIPHON_POOL && !PsiphonController.isRunning()) {
-                    val httpUpstream = "http://127.0.0.1:${config.httpPort.ifBlank { "1820" }}"
-                    LogRepository.i("[VpnService] Starting Psiphon multi-core pool over primary core (upstream=$httpUpstream)")
+                    val httpUpstream = "http://127.0.0.1:${config.httpPort.ifBlank { "2020" }}"
+                    LogRepository.i("[VpnService] Starting Psiphon core over primary core (upstream=$httpUpstream)")
                     PsiphonController.start(this@AetherVpnService, config, upstream = httpUpstream)
                     var wait = 0
                     while (wait < 30 && !PsiphonController.isConnected()) {
                         delay(1000.milliseconds)
                         wait++
                     }
-                    if (PsiphonController.isRunning()) {
+                    if (PsiphonController.isConnected()) {
                         ActiveProxyProvider.psiphonProxyUrl = PsiphonController.getUpstreamProxy()
-                        LogRepository.i("[VpnService] Psiphon multi-instance pool ready at ${ActiveProxyProvider.psiphonProxyUrl}")
+                        LogRepository.i("[VpnService] Psiphon egress ready at ${ActiveProxyProvider.psiphonProxyUrl}")
                     } else {
-                        LogRepository.w("[VpnService] Psiphon pool wait timed out, falling back to direct")
+                        LogRepository.e("[VpnService] Psiphon wait timed out, could not establish egress")
+                        throw IllegalStateException("Psiphon egress connection timed out")
                     }
                 }
 
@@ -839,13 +840,13 @@ class AetherVpnService : VpnService() {
                     return "127.0.0.1" to port
                 }
                 val host = config.socksHost
-                val port = config.socksPort.toIntOrNull() ?: 1819
+                val port = config.socksPort.toIntOrNull() ?: 2021
                 return host to port
             }
             ExitNodeMode.PSIPHON_POOL -> {
                 val poolPort = psiphonUrl?.substringAfterLast(":")?.toIntOrNull()
                     ?: config.psiphonSocksPort.toIntOrNull()
-                    ?: 10800
+                    ?: 3080
                 return "127.0.0.1" to poolPort
             }
             ExitNodeMode.CUSTOM_WG -> {
@@ -853,7 +854,7 @@ class AetherVpnService : VpnService() {
                 val wgCfg = config.customWgConfig
                 if (wgCfg.isValid()) {
                     if (wgExitTunnel == null) {
-                        val primaryPort = config.socksPort.toIntOrNull() ?: 1819
+                        val primaryPort = config.socksPort.toIntOrNull() ?: 2021
                         val tunnel = WireGuardExitTunnel(
                             config = wgCfg,
                             primarySocksHost = "127.0.0.1",
@@ -866,20 +867,20 @@ class AetherVpnService : VpnService() {
                             return "127.0.0.1" to localPort
                         } else {
                             LogRepository.w("[VpnService] Custom WG start failed, falling back to direct primary socks")
-                            return "127.0.0.1" to (config.socksPort.toIntOrNull() ?: 1819)
+                            return "127.0.0.1" to (config.socksPort.toIntOrNull() ?: 2021)
                         }
                     }
                     return "127.0.0.1" to localPort
                 } else {
                     LogRepository.w("[VpnService] Custom WG config invalid, falling back to direct primary socks")
-                    return "127.0.0.1" to (config.socksPort.toIntOrNull() ?: 1819)
+                    return "127.0.0.1" to (config.socksPort.toIntOrNull() ?: 2021)
                 }
             }
             ExitNodeMode.CUSTOM_SOCKS5 -> {
                 val localPort = 10806
                 if (config.customSocks5Host.isNotBlank()) {
                     if (customSocksRelay == null) {
-                        val primaryPort = config.socksPort.toIntOrNull() ?: 1819
+                        val primaryPort = config.socksPort.toIntOrNull() ?: 2021
                         val relay = CustomSocks5Relay(
                             listenPort = localPort,
                             primarySocksHost = "127.0.0.1",
@@ -895,13 +896,13 @@ class AetherVpnService : VpnService() {
                             return "127.0.0.1" to localPort
                         } else {
                             LogRepository.w("[VpnService] Custom SOCKS5 start failed, falling back to direct primary socks")
-                            return "127.0.0.1" to (config.socksPort.toIntOrNull() ?: 1819)
+                            return "127.0.0.1" to (config.socksPort.toIntOrNull() ?: 2021)
                         }
                     }
                     return "127.0.0.1" to localPort
                 } else {
                     LogRepository.w("[VpnService] Custom SOCKS5 host blank, falling back to direct primary socks")
-                    return "127.0.0.1" to (config.socksPort.toIntOrNull() ?: 1819)
+                    return "127.0.0.1" to (config.socksPort.toIntOrNull() ?: 2021)
                 }
             }
         }

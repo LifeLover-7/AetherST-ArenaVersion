@@ -8,34 +8,31 @@ import io.github.immaghzbad.aetherst.shared.data.AetherConfigRepository
 import io.github.immaghzbad.aetherst.shared.data.LogRepository
 import io.github.immaghzbad.aetherst.shared.data.PsiphonEgressRegistry
 import io.github.immaghzbad.aetherst.shared.model.AetherConfig
+import io.github.immaghzbad.aetherst.shared.model.ChainProvider
 import io.github.immaghzbad.aetherst.shared.model.ExitNodeMode
-import io.github.immaghzbad.aetherst.shared.net.SocksPoolLoadBalancer
 import kotlinx.coroutines.*
 import java.io.File
 import java.net.InetSocketAddress
 import java.net.Socket
-import java.util.concurrent.CopyOnWriteArrayList
 import java.util.concurrent.atomic.AtomicBoolean
-import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicLong
 
 object PsiphonController {
-    const val POOL_SIZE = 2
-    const val BASE_PORT = 10801
-
-    @Volatile private var psiphonPort: Int = 10800
+    @Volatile private var psiphonPort: Int = 3080
     @Volatile private var running = false
     @Volatile private var connected = false
     private val isStarting = AtomicBoolean(false)
     private val lastEventTime = AtomicLong(0L)
-    private val connectedCount = AtomicInteger(0)
 
-    private val processes = CopyOnWriteArrayList<Process>()
-    private val monitorJobs = CopyOnWriteArrayList<Job>()
+    private var process: Process? = null
+    private var monitorJob: Job? = null
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
-    @Volatile private var loadBalancer: SocksPoolLoadBalancer? = null
 
-    fun isSupported(config: AetherConfig): Boolean = config.psiphonEnabled || config.exitNodeMode == ExitNodeMode.PSIPHON_POOL
+    fun isSupported(config: AetherConfig): Boolean {
+        return config.psiphonEnabled ||
+                config.exitNodeMode == ExitNodeMode.PSIPHON_POOL ||
+                config.chainProvider == ChainProvider.PSIPHON
+    }
 
     fun getPort(): Int = psiphonPort
 
@@ -43,101 +40,85 @@ object PsiphonController {
 
     fun start(context: PlatformContext, config: AetherConfig, upstream: String? = null): Boolean {
         if (!isSupported(config)) return false
-        if (running && processes.any { it.isAlive }) return true
+        if (running && process?.isAlive == true) return true
         if (isStarting.getAndSet(true)) return false
 
         return try {
             val baseDir = File(getSystemUtils(context).getFilesDir())
-            val psiphonPoolDir = File(baseDir, "psiphon_pool")
-            if (!psiphonPoolDir.exists()) psiphonPoolDir.mkdirs()
+            val psiphonDir = File(baseDir, "psiphon")
+            if (!psiphonDir.exists()) psiphonDir.mkdirs()
 
-            val port = config.psiphonSocksPort.toIntOrNull() ?: 10800
+            val port = config.psiphonSocksPort.toIntOrNull() ?: 3080
             psiphonPort = port
 
             val binManager = getBinaryManager(context)
             val binaryPath = binManager.prepareBinary("psiphon-tunnel-core.exe")
 
-            val poolPorts = (0 until POOL_SIZE).map { BASE_PORT + it }
-            connectedCount.set(0)
-            processes.clear()
-            monitorJobs.forEach { it.cancel() }
-            monitorJobs.clear()
+            val serverListFile = File(psiphonDir, "server_entries.txt")
+            copyServerEntries(psiphonDir)
 
-            // 1. Start Round-Robin SOCKS5 Load Balancer
-            val lb = SocksPoolLoadBalancer(
-                listenHost = "127.0.0.1",
-                listenPort = psiphonPort,
-                upstreamPorts = poolPorts
-            )
-            if (!lb.start()) {
-                LogRepository.e("[PsiphonPool] Failed to start desktop load balancer on $psiphonPort", "Psiphon")
+            val configFile = File(psiphonDir, "psiphon.config")
+            val configJson = buildPsiphonConfig(psiphonDir, port, config.psiphonEgressRegion, upstream)
+            configFile.writeText(configJson)
+
+            LogRepository.i("[Psiphon] Launching core on port $port with serverList (Egress=${config.psiphonEgressRegion.ifBlank { "Auto" }})...", "Psiphon")
+
+            val command = mutableListOf(binaryPath, "-config", configFile.absolutePath)
+            if (serverListFile.exists() && serverListFile.length() > 0) {
+                command.add("-serverList")
+                command.add(serverListFile.absolutePath)
             }
-            loadBalancer = lb
 
-            // 2. Start pool of 4 parallel processes
-            for (i in 0 until POOL_SIZE) {
-                val instPort = BASE_PORT + i
-                val instDir = File(psiphonPoolDir, "inst_$i")
-                if (!instDir.exists()) instDir.mkdirs()
+            val logFile = File(psiphonDir, "psiphon.log")
+            val pb = ProcessBuilder(command)
+            pb.directory(psiphonDir)
+            pb.environment()["GOMEMLIMIT"] = "48MiB"
+            pb.environment()["GOGC"] = "50"
+            pb.redirectErrorStream(true)
 
-                copyServerEntries(instDir)
+            val proc = pb.start()
+            process = proc
+            running = true
+            connected = false
 
-                val serverListFile = File(instDir, "server_entries.txt")
-                val configFile = File(instDir, "psiphon.config")
-                val configJson = buildPsiphonConfig(instDir, instPort, config.psiphonEgressRegion, upstream)
-                configFile.writeText(configJson)
-
-                val command = mutableListOf(binaryPath, "-config", configFile.absolutePath)
-                if (serverListFile.exists() && serverListFile.length() > 0) {
-                    command.add("-serverList")
-                    command.add(serverListFile.absolutePath)
-                }
-
-                val logFile = File(instDir, "psiphon.log")
-                val pb = ProcessBuilder(command)
-                pb.directory(instDir)
-                pb.environment()["GOMEMLIMIT"] = "32MiB"
-                pb.environment()["GOGC"] = "50"
-                pb.redirectErrorStream(true)
-
-                val proc = pb.start()
-                processes.add(proc)
-
-                val job = scope.launch {
-                    try {
-                        proc.inputStream.bufferedReader().use { reader ->
-                            while (isActive) {
-                                val line = reader.readLine() ?: break
-                                logFile.appendText(line + "\n")
-                                parsePsiphonOutput(context, line)
-                            }
+            monitorJob?.cancel()
+            monitorJob = scope.launch {
+                try {
+                    proc.inputStream.bufferedReader().use { reader ->
+                        while (isActive) {
+                            val line = reader.readLine() ?: break
+                            logFile.appendText(line + "\n")
+                            parsePsiphonOutput(context, line)
                         }
-                    } catch (_: Exception) {}
-                }
-                monitorJobs.add(job)
+                    }
+                } catch (_: Exception) {}
             }
 
-            running = processes.isNotEmpty()
-            LogRepository.i("[PsiphonPool] Desktop launched $POOL_SIZE parallel cores (ports: ${poolPorts.joinToString()}) with OSSH lock and LB on $psiphonPort", "Psiphon")
             isStarting.set(false)
             true
         } catch (e: Exception) {
             isStarting.set(false)
             running = false
             connected = false
-            LogRepository.e("[PsiphonPool] Launch error: ${e.message}", "Psiphon")
+            LogRepository.e("[Psiphon] Launch error: ${e.message}", "Psiphon")
             false
         }
     }
 
     private fun parsePsiphonOutput(context: PlatformContext, line: String) {
+        if (line.contains("ListeningSocksProxyPort", ignoreCase = true)) {
+            val portMatch = Regex(""""port":\s*(\d+)""").find(line)
+            val p = portMatch?.groupValues?.get(1)?.toIntOrNull() ?: psiphonPort
+            psiphonPort = p
+            LogRepository.i("[Psiphon] Core listening on port $p", "Psiphon")
+        }
+
         if (line.contains("ActiveTunnel", ignoreCase = true) ||
             line.contains("Tunnels", ignoreCase = true) ||
             line.contains("tunnel connected", ignoreCase = true)) {
             connected = true
-            connectedCount.incrementAndGet()
             lastEventTime.set(System.currentTimeMillis())
-            LogRepository.i("[PsiphonPool] Core connected (${connectedCount.get()}/$POOL_SIZE active)", "Psiphon")
+            LogRepository.i("[Psiphon] Tunnel connected successfully! Egress hop established.", "Psiphon")
         }
 
         if (line.contains("AvailableEgressRegions", ignoreCase = true) || line.contains("regions", ignoreCase = true)) {
@@ -148,13 +129,14 @@ object PsiphonController {
             if (regions.isNotEmpty()) {
                 PsiphonEgressRegistry.setAvailableRegions(regions)
                 runCatching { AetherConfigRepository.getInstance(getSettings(context)).cacheEgressRegions(regions) }
+                LogRepository.i("[Psiphon] Available egress regions: ${regions.joinToString()}", "Psiphon")
             }
         }
     }
 
     private fun buildPsiphonConfig(dir: File, port: Int, egressRegion: String, upstream: String?): String {
         val safeDir = dir.absolutePath.replace("\\", "\\\\")
-        val safeEgress = if (egressRegion.isNotEmpty()) ""","EgressRegion":"$egressRegion"""" else ""
+        val safeEgress = if (egressRegion.isNotBlank()) ""","EgressRegion":"$egressRegion"""" else ""
         val safeUpstream = if (!upstream.isNullOrEmpty()) ""","UpstreamProxyURL":"${upstream.replace("\"", "\\\"")}"""" else ""
 
         return """
@@ -189,34 +171,29 @@ object PsiphonController {
     }
 
     fun stop() {
-        if (!running && processes.isEmpty()) return
+        if (!running && process == null) return
         running = false
         connected = false
-        connectedCount.set(0)
-        monitorJobs.forEach { it.cancel() }
-        monitorJobs.clear()
-        loadBalancer?.stop()
-        loadBalancer = null
+        monitorJob?.cancel()
+        monitorJob = null
 
         Thread {
-            for (p in processes) {
-                try { p.destroy() } catch (_: Exception) {}
-            }
-            processes.clear()
-            if (System.getProperty("os.name").lowercase().contains("win")) {
-                try {
+            try {
+                process?.destroy()
+                process = null
+                if (System.getProperty("os.name").lowercase().contains("win")) {
                     ProcessBuilder("taskkill", "/F", "/T", "/IM", "psiphon-tunnel-core.exe")
                         .redirectErrorStream(true).start()
-                } catch (_: Exception) {}
-            }
+                }
+            } catch (_: Exception) {}
         }.apply { isDaemon = true; start() }
 
-        LogRepository.i("[PsiphonPool] Desktop stopped all instances and load balancer", "Psiphon")
+        LogRepository.i("[Psiphon] Stopped", "Psiphon")
     }
 
-    fun isRunning(): Boolean = running && processes.any { it.isAlive }
+    fun isRunning(): Boolean = running && (process?.isAlive == true)
 
-    fun isConnected(): Boolean = connected && isRunning() && connectedCount.get() > 0
+    fun isConnected(): Boolean = connected && isRunning()
 
     fun stableFor(graceMs: Long): Boolean = connected && isRunning() &&
             (System.currentTimeMillis() - lastEventTime.get()) >= graceMs

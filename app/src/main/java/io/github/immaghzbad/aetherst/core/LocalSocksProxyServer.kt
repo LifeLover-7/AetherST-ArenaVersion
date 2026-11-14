@@ -20,7 +20,7 @@ class LocalSocksProxyServer(
     private val listenHost: String = "127.0.0.1",
     private val listenPort: Int = 10808,
     private val targetHost: String = "127.0.0.1",
-    private val targetPort: Int = 1819,
+    private val targetPort: Int = 2021,
     private val routingEngine: RoutingEngine
 ) {
     private val isRunning = AtomicBoolean(false)

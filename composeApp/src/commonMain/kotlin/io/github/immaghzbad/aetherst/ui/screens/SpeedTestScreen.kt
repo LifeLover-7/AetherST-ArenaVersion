@@ -136,7 +136,7 @@ fun SpeedTestScreen(
 
     val isRunning = connectionStatus == ConnectionStatus.RUNNING
     val socksHost = config.socksHost
-    val socksPort = config.socksPort.toIntOrNull() ?: 1819
+    val socksPort = config.socksPort.toIntOrNull() ?: 2021
 
     DisposableEffect(Unit) {
         onDispose { SpeedTestRepository.cancelTest() }

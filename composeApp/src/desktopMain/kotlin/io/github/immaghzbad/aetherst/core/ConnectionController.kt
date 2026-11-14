@@ -73,7 +73,7 @@ actual object ConnectionController {
         private var prevRx = 0L
 
         @Volatile private var tunnelModeStarted = false
-        @Volatile private var activeTargetPort = 1819
+        @Volatile private var activeTargetPort = 2021
         @Volatile private var isPsiphonActive = false
         @Volatile private var isUserInitiatedStop = false
         @Volatile private var wgExitTunnel: io.github.immaghzbad.aetherst.shared.net.WireGuardExitTunnel? = null
@@ -166,8 +166,8 @@ actual object ConnectionController {
             baseTx = getWintunBytes().first
             baseRx = getWintunBytes().second
 
-            val coreSocksPort = effectiveConfig.socksPort.toIntOrNull() ?: 1819
-            val configuredHttpPort = effectiveConfig.httpPort.toIntOrNull() ?: 1820
+            val coreSocksPort = effectiveConfig.socksPort.toIntOrNull() ?: 2021
+            val configuredHttpPort = effectiveConfig.httpPort.toIntOrNull() ?: 2020
             val actualHttpPort = if (configuredHttpPort == coreSocksPort) coreSocksPort + 1 else configuredHttpPort
 
             statusJob?.cancel()
@@ -237,7 +237,7 @@ actual object ConnectionController {
                     var psiphonReady = false
                     for (i in 0..30) {
                         currentCoroutineContext().ensureActive()
-                        if (PsiphonController.isConnected() || PsiphonController.probeListening()) {
+                        if (PsiphonController.isConnected()) {
                             psiphonReady = true
                             break
                         }
@@ -250,8 +250,12 @@ actual object ConnectionController {
                         ActiveProxyProvider.psiphonProxyUrl = PsiphonController.getUpstreamProxy()
                         LogRepository.i("[Controller] Psiphon Chain ready! Port: $effectiveTargetPort", "Psiphon")
                     } else {
-                        LogRepository.w("[Controller] Psiphon wait timed out, falling back to core port $coreSocksPort", "Psiphon")
+                        LogRepository.e("[Controller] Psiphon egress connection timed out (30s)", "Psiphon")
+                        throw IllegalStateException("Psiphon exit node connection timed out")
                     }
+                } else {
+                    LogRepository.e("[Controller] Psiphon failed to start", "Psiphon")
+                    throw IllegalStateException("Psiphon exit node failed to launch")
                 }
             } else if (effectiveConfig.exitNodeMode == ExitNodeMode.CUSTOM_WG) {
                 val wgCfg = effectiveConfig.customWgConfig
@@ -268,12 +272,12 @@ actual object ConnectionController {
                         effectiveTargetPort = 10805
                         LogRepository.i("[Controller] Custom WireGuard Exit ready on port 10805", "WireGuard")
                     } else {
-                        LogRepository.w("[Controller] Custom WireGuard start failed, falling back to core port $coreSocksPort", "WireGuard")
-                        effectiveTargetPort = coreSocksPort
+                        LogRepository.e("[Controller] Custom WireGuard start failed", "WireGuard")
+                        throw IllegalStateException("Custom WireGuard exit failed to establish connection")
                     }
                 } else {
-                    LogRepository.w("[Controller] Custom WireGuard config invalid, falling back to core port $coreSocksPort", "WireGuard")
-                    effectiveTargetPort = coreSocksPort
+                    LogRepository.e("[Controller] Custom WireGuard config is invalid or incomplete", "WireGuard")
+                    throw IllegalStateException("Invalid Custom WireGuard configuration")
                 }
             } else if (effectiveConfig.exitNodeMode == ExitNodeMode.CUSTOM_SOCKS5 && effectiveConfig.customSocks5Host.isNotBlank()) {
                 val relay = io.github.immaghzbad.aetherst.shared.net.CustomSocks5Relay(
@@ -291,8 +295,8 @@ actual object ConnectionController {
                     effectiveTargetPort = 10806
                     LogRepository.i("[Controller] Custom SOCKS5 Exit ready on port 10806", "SOCKS5")
                 } else {
-                    LogRepository.w("[Controller] Custom SOCKS5 start failed, falling back to core port $coreSocksPort", "SOCKS5")
-                    effectiveTargetPort = coreSocksPort
+                    LogRepository.e("[Controller] Custom SOCKS5 relay start failed", "SOCKS5")
+                    throw IllegalStateException("Custom SOCKS5 exit failed to connect")
                 }
             }
 

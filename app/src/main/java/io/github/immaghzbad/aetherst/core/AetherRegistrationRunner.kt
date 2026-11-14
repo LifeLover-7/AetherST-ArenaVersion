@@ -67,7 +67,7 @@ class AetherRegistrationRunner(private val context: Context) {
             val binaryFile = BinaryManager.prepareBinary(context)
             if (currentAttemptId.get() != attemptId) return RegistrationResult.Cancelled
 
-            val port = config.socksPort.toIntOrNull() ?: 1819
+            val port = config.socksPort.toIntOrNull() ?: 2021
             val bindAddr = "${config.socksHost}:$port"
 
             val commandList = mutableListOf<String>()

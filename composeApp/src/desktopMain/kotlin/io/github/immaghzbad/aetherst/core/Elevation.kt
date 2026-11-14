@@ -17,7 +17,7 @@ object Elevation {
 
     fun relaunchElevatedAndExit(): Boolean {
         SingleInstanceLock.release()
-        runCatching { java.net.ServerSocket(18195).use { } } 
+        runCatching { java.net.ServerSocket(20215).use { } } 
         val launcher = System.getProperty("jpackage.app-path")
         if (!launcher.isNullOrBlank() && File(launcher).exists()) {
             return runCatching {

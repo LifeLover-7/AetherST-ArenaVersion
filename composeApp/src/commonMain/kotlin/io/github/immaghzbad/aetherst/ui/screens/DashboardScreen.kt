@@ -86,6 +86,7 @@ fun DashboardScreen(
     var showTorSheet by remember { mutableStateOf(false) }
     var showCustomWgDialog by remember { mutableStateOf(false) }
     var showCustomSocks5Dialog by remember { mutableStateOf(false) }
+    var showRoutingModal by remember { mutableStateOf(false) }
     val strings = LocalAppStrings.current
     val uriHandler = LocalUriHandler.current
     val settings = platformContext?.let { getSettings(it) }
@@ -301,32 +302,13 @@ fun DashboardScreen(
                 }
 
                 if (!isVeryCompactHeight) {
-                    IosProtocolSegmentedControl(
-                        selectedProtocol = config.protocol,
-                        onProtocolSelected = onUpdateProtocol,
-                        enabled = connectionStatus == ConnectionStatus.STOPPED || connectionStatus == ConnectionStatus.ERROR,
-                        allowedProtocols = if (config.isPsiphonActive() || config.isTorActive()) setOf(AetherProtocol.MASQUE, AetherProtocol.WG, AetherProtocol.GOOL) else null,
-                        scaleFactor = scaleFactor
-                    )
-
-                    ExitNodeCard(
+                    RoutingHubCard(
                         config = config,
-                        onUpdateConfig = onUpdateConfig,
-                        onOpenPsiphonSheet = { showPsiphonSheet = true },
-                        onOpenWgDialog = { showCustomWgDialog = true },
-                        onOpenSocks5Dialog = { showCustomSocks5Dialog = true },
+                        connectionStatus = connectionStatus,
+                        onClick = { showRoutingModal = true },
                         enabled = connectionStatus == ConnectionStatus.STOPPED || connectionStatus == ConnectionStatus.ERROR,
                         scaleFactor = scaleFactor
                     )
-
-                    if (isDesktop && isWindows) {
-                        IosConnectionModeSegmentedControl(
-                            selectedMode = config.connectionMode,
-                            onModeSelected = { onUpdateConfig(config.copy(connectionMode = it)) },
-                            enabled = connectionStatus == ConnectionStatus.STOPPED || connectionStatus == ConnectionStatus.ERROR,
-                            scaleFactor = scaleFactor
-                        )
-                    }
                 }
             }
         }
@@ -355,6 +337,18 @@ fun DashboardScreen(
                     showSupportDialog = false
                 },
                 onCancel = { showSupportDialog = false },
+                scaleFactor = scaleFactor
+            )
+        }
+        if (showRoutingModal) {
+            RoutingModalDialog(
+                config = config,
+                onUpdateConfig = onUpdateConfig,
+                onUpdateProtocol = onUpdateProtocol,
+                onOpenPsiphonSheet = { showPsiphonSheet = true },
+                onOpenWgDialog = { showCustomWgDialog = true },
+                onOpenSocks5Dialog = { showCustomSocks5Dialog = true },
+                onDismiss = { showRoutingModal = false },
                 scaleFactor = scaleFactor
             )
         }
@@ -618,22 +612,28 @@ fun IosStatusHeroCard(
                     Surface(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .clip(RoundedCornerShape(8.dp))
-                            .clickable {
-                                if (ipInfo.ip.isNotEmpty()) {
-                                    onCopy(ipInfo.ip)
-                                } else {
-                                    onRefreshIpInfo()
-                                }
-                            },
-                        color = IosGroupBg
+                            .clip(RoundedCornerShape(8.dp)),
+                        color = AppPalette.groupBg
                     ) {
                         Row(
-                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 6.dp),
+                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
                             verticalAlignment = Alignment.CenterVertically,
                             horizontalArrangement = Arrangement.SpaceBetween
                         ) {
-                            Row(modifier = Modifier.weight(1f), verticalAlignment = Alignment.CenterVertically) {
+                            Row(
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .clip(RoundedCornerShape(6.dp))
+                                    .clickable {
+                                        if (ipInfo.ip.isNotEmpty()) {
+                                            onCopy(ipInfo.ip)
+                                        } else {
+                                            onRefreshIpInfo()
+                                        }
+                                    }
+                                    .padding(vertical = 2.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
                                 if (ipInfo.countryCode.isNotEmpty()) {
                                     CountryFlag(countryCode = ipInfo.countryCode, size = (20 * scaleFactor).dp)
                                 } else {
@@ -675,13 +675,9 @@ fun IosStatusHeroCard(
                                 }
                             }
 
-                            Box(
-                                modifier = Modifier
-                                    .size((30 * scaleFactor).dp)
-                                    .clip(CircleShape)
-                                    .clickable { onRefreshIpInfo() }
-                                    .padding((4 * scaleFactor).dp),
-                                contentAlignment = Alignment.Center
+                            IconButton(
+                                onClick = { onRefreshIpInfo() },
+                                modifier = Modifier.size((34 * scaleFactor).dp)
                             ) {
                                 if (ipInfo.isLoading) {
                                     CircularProgressIndicator(
@@ -692,7 +688,7 @@ fun IosStatusHeroCard(
                                 } else {
                                     Icon(
                                         imageVector = Icons.Default.Refresh,
-                                        contentDescription = "Refresh",
+                                        contentDescription = "Refresh IP",
                                         tint = IosActiveBlue,
                                         modifier = Modifier.size((18 * scaleFactor).dp)
                                     )

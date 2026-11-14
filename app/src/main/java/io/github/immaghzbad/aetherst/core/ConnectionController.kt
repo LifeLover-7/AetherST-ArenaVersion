@@ -174,9 +174,9 @@ class ConnectionController private constructor(context: Context) : ConnectionCon
 
             // اطمینان از فعال بودن HTTP Proxy داخلی هسته هنگام استفاده از زنجیره سایفون
             if (psiphonSupported && !effectiveConfig.psiphonOnly) {
-                val coreSocks = effectiveConfig.socksPort.toIntOrNull() ?: 1819
-                val cfgHttp = effectiveConfig.httpPort.toIntOrNull() ?: 1820
-                val safeHttpPort = if (cfgHttp == coreSocks) (coreSocks + 1).toString() else effectiveConfig.httpPort.ifBlank { "1820" }
+                val coreSocks = effectiveConfig.socksPort.toIntOrNull() ?: 2021
+                val cfgHttp = effectiveConfig.httpPort.toIntOrNull() ?: 2020
+                val safeHttpPort = if (cfgHttp == coreSocks) (coreSocks + 1).toString() else effectiveConfig.httpPort.ifBlank { "2020" }
                 effectiveConfig = effectiveConfig.copy(httpProxyEnabled = true, httpPort = safeHttpPort)
             }
 
@@ -919,7 +919,7 @@ class ConnectionController private constructor(context: Context) : ConnectionCon
         }
         LogRepository.i("[Controller] Tor-only mode, bringing up plain Tor without tunnel at $bindAddress")
         runner.start(config, bindAddress, onCodeRequired = { updateIsWaitingForCode(true) }, inputProvider = { loginCodeChannel.receive() })
-        val bindPort = config.socksPort.toIntOrNull() ?: 1819
+        val bindPort = config.socksPort.toIntOrNull() ?: 2021
         val deadline = System.currentTimeMillis() + 180_000
         var lastStatus = runner.connectionStatus.value
         var socksReady = false
@@ -1027,7 +1027,7 @@ class ConnectionController private constructor(context: Context) : ConnectionCon
 
     private suspend fun finishCoreStart(config: AetherConfig, attemptId: Long): Boolean {
         if (torChaining) return true
-        publishCoreActive(config.socksPort.toIntOrNull() ?: 1819, attemptId)
+        publishCoreActive(config.socksPort.toIntOrNull() ?: 2021, attemptId)
         return true
     }
 
@@ -1044,7 +1044,7 @@ class ConnectionController private constructor(context: Context) : ConnectionCon
     private suspend fun lookupTunnelExitCountry(config: AetherConfig, attemptId: Long): String? {
         if (activeAttemptId.get() != attemptId) return null
         return try {
-            val proxyPort = config.socksPort.toIntOrNull() ?: 1819
+            val proxyPort = config.socksPort.toIntOrNull() ?: 2021
             val exit = IpInfoRepository.fetchExitCountry("127.0.0.1", proxyPort, useProxy = true)
             if (activeAttemptId.get() != attemptId) return null
             exit?.countryCode?.trim()?.uppercase()?.takeIf { it.isNotEmpty() }
@@ -1111,7 +1111,7 @@ class ConnectionController private constructor(context: Context) : ConnectionCon
         val chainingTor = torChaining
         LogRepository.i("[Controller] Starting core at $bindAddress (event-driven, awaiting core verdict)")
         runner.start(config, bindAddress, onCodeRequired = { updateIsWaitingForCode(true) }, inputProvider = { loginCodeChannel.receive() })
-        val proxyPort = config.socksPort.toIntOrNull() ?: 1819
+        val proxyPort = config.socksPort.toIntOrNull() ?: 2021
         var dpValidated = false
         var lastStatus = runner.connectionStatus.value
         var lastProgressAt = System.currentTimeMillis()
