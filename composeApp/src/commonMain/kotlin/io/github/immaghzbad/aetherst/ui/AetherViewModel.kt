@@ -664,7 +664,15 @@ class AetherViewModel(platformContext: PlatformContext) : ViewModel() {
         val effectivePort = when (cfg.exitNodeMode) {
             ExitNodeMode.CUSTOM_WG -> 10805
             ExitNodeMode.CUSTOM_SOCKS5 -> 10806
-            ExitNodeMode.PSIPHON_POOL -> 10800
+            ExitNodeMode.PSIPHON_POOL -> {
+                val psiphon = ActiveProxyProvider.psiphonProxyUrl
+                if (!psiphon.isNullOrEmpty()) {
+                    psiphon.removePrefix("socks5://").removePrefix("socks://").split(":").getOrNull(1)?.toIntOrNull()
+                        ?: cfg.psiphonSocksPort.toIntOrNull() ?: 3080
+                } else {
+                    cfg.psiphonSocksPort.toIntOrNull() ?: 3080
+                }
+            }
             ExitNodeMode.DIRECT -> {
                 val psiphon = ActiveProxyProvider.psiphonProxyUrl
                 if (!psiphon.isNullOrEmpty()) {
@@ -690,7 +698,7 @@ class AetherViewModel(platformContext: PlatformContext) : ViewModel() {
     fun refreshPing() {
         viewModelScope.launch {
             val state = connectionStatus.value
-            if (state == ConnectionStatus.RUNNING) {
+            if (state == ConnectionStatus.RUNNING || state == ConnectionStatus.TUN_ACTIVE) {
                 val cfg = config.value
                 if (cfg.isTorActive() && ActiveProxyProvider.torProxyUrl.isNullOrEmpty()) {
                     PingRepository.reset()
@@ -706,7 +714,28 @@ class AetherViewModel(platformContext: PlatformContext) : ViewModel() {
                     val parts = body.split(":", limit = 2)
                     PingRepository.runPing(parts.first(), parts.getOrNull(1)?.toIntOrNull() ?: 3081, useProxy = true, pingUrl = cfg.pingUrl)
                 } else {
-                    PingRepository.runPing(cfg.socksHost, cfg.socksPort.toIntOrNull() ?: 2021, useProxy = true, pingUrl = cfg.pingUrl)
+                    val exitPort = when (cfg.exitNodeMode) {
+                        ExitNodeMode.CUSTOM_WG -> 10805
+                        ExitNodeMode.CUSTOM_SOCKS5 -> 10806
+                        ExitNodeMode.PSIPHON_POOL -> {
+                            val psiphon = ActiveProxyProvider.psiphonProxyUrl
+                            if (!psiphon.isNullOrEmpty()) {
+                                psiphon.removePrefix("socks5://").removePrefix("socks://").split(":").getOrNull(1)?.toIntOrNull()
+                                    ?: cfg.psiphonSocksPort.toIntOrNull() ?: 3080
+                            } else {
+                                cfg.psiphonSocksPort.toIntOrNull() ?: 3080
+                            }
+                        }
+                        ExitNodeMode.DIRECT -> {
+                            val psiphon = ActiveProxyProvider.psiphonProxyUrl
+                            if (!psiphon.isNullOrEmpty()) {
+                                psiphon.removePrefix("socks5://").removePrefix("socks://").split(":").getOrNull(1)?.toIntOrNull() ?: 3080
+                            } else {
+                                cfg.socksPort.toIntOrNull() ?: 2021
+                            }
+                        }
+                    }
+                    PingRepository.runPing(cfg.socksHost, exitPort, useProxy = true, pingUrl = cfg.pingUrl)
                 }
             } else {
                 PingRepository.reset()

@@ -1122,20 +1122,21 @@ fun IosConnectionModeSegmentedControl(
     )
     Surface(
         modifier = Modifier.fillMaxWidth(),
-        shape = RoundedCornerShape(28.dp),
-        color = IosCardBg,
-        shadowElevation = 8.dp,
+        shape = RoundedCornerShape(16.dp),
+        color = Color(0xFF0D0F17),
+        border = BorderStroke(1.dp, Color(0xFF262C3D)),
+        shadowElevation = 0.dp,
         tonalElevation = 0.dp
     ) {
         Row(
-            modifier = Modifier.fillMaxWidth().background(IosCardBg).padding(4.dp),
+            modifier = Modifier.fillMaxWidth().background(Color(0xFF0D0F17)).padding(4.dp),
             horizontalArrangement = Arrangement.spacedBy(4.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
             modes.forEach { (mode, label) ->
                 val selected = mode == selectedMode
                 val bg by animateColorAsState(targetValue = if (selected) IosActiveBlue else Color.Transparent, animationSpec = tween(250), label = "modeBg")
-                val textColor by animateColorAsState(targetValue = if (selected) Color.White else IosSecondaryLabel, animationSpec = tween(250), label = "modeText")
+                val textColor by animateColorAsState(targetValue = if (selected) Color.White else Color(0xFFCBD5E1), animationSpec = tween(250), label = "modeText")
                 Box(
                     modifier = Modifier
                         .weight(1f)
@@ -1176,8 +1177,8 @@ fun ExitNodeCard(
     Card(
         modifier = Modifier.fillMaxWidth(),
         shape = RoundedCornerShape(20.dp),
-        colors = CardDefaults.cardColors(containerColor = IosCardBg),
-        border = CardDefaults.outlinedCardBorder().copy(brush = SolidColor(Color.White.copy(alpha = 0.08f)))
+        colors = CardDefaults.cardColors(containerColor = Color(0xFF141721)),
+        border = BorderStroke(1.dp, Color(0xFF262C3D))
     ) {
         Column(modifier = Modifier.padding(12.dp)) {
             // Header
@@ -1204,7 +1205,7 @@ fun ExitNodeCard(
                     )
                     Text(
                         text = strings.EXIT_NODE_SUBTITLE,
-                        color = IosSecondaryLabel,
+                        color = Color(0xFFCBD5E1),
                         fontSize = (10 * scaleFactor).sp
                     )
                 }
@@ -1224,14 +1225,15 @@ fun ExitNodeCard(
                 modifier = Modifier
                     .fillMaxWidth()
                     .clip(RoundedCornerShape(12.dp))
-                    .background(IosGroupBg)
+                    .background(Color(0xFF0D0F17))
+                    .border(BorderStroke(1.dp, Color(0xFF262C3D)), RoundedCornerShape(12.dp))
                     .padding(3.dp),
                 horizontalArrangement = Arrangement.spacedBy(3.dp)
             ) {
                 options.forEach { (mode, label) ->
                     val selected = currentMode == mode
                     val bg by animateColorAsState(targetValue = if (selected) IosActiveBlue else Color.Transparent, label = "exitBg")
-                    val textColor by animateColorAsState(targetValue = if (selected) Color.White else IosSecondaryLabel, label = "exitText")
+                    val textColor by animateColorAsState(targetValue = if (selected) Color.White else Color(0xFFCBD5E1), label = "exitText")
                     Box(
                         modifier = Modifier
                             .weight(1f)
@@ -1277,7 +1279,8 @@ fun ExitNodeCard(
                         modifier = Modifier
                             .fillMaxWidth()
                             .clip(RoundedCornerShape(10.dp))
-                            .background(IosGroupBg.copy(alpha = 0.6f))
+                            .background(Color(0xFF0D0F17))
+                            .border(BorderStroke(1.dp, Color(0xFF262C3D)), RoundedCornerShape(10.dp))
                             .clickable(enabled = enabled) { onOpenPsiphonSheet() }
                             .padding(horizontal = 10.dp, vertical = 8.dp),
                         verticalAlignment = Alignment.CenterVertically,
@@ -1340,7 +1343,8 @@ fun ExitNodeCard(
                         modifier = Modifier
                             .fillMaxWidth()
                             .clip(RoundedCornerShape(10.dp))
-                            .background(IosGroupBg.copy(alpha = 0.6f))
+                            .background(Color(0xFF0D0F17))
+                            .border(BorderStroke(1.dp, Color(0xFF262C3D)), RoundedCornerShape(10.dp))
                             .clickable { onOpenWgDialog() }
                             .padding(horizontal = 10.dp, vertical = 8.dp),
                         verticalAlignment = Alignment.CenterVertically,
@@ -1374,7 +1378,8 @@ fun ExitNodeCard(
                         modifier = Modifier
                             .fillMaxWidth()
                             .clip(RoundedCornerShape(10.dp))
-                            .background(IosGroupBg.copy(alpha = 0.6f))
+                            .background(Color(0xFF0D0F17))
+                            .border(BorderStroke(1.dp, Color(0xFF262C3D)), RoundedCornerShape(10.dp))
                             .clickable { onOpenSocks5Dialog() }
                             .padding(horizontal = 10.dp, vertical = 8.dp),
                         verticalAlignment = Alignment.CenterVertically,
@@ -1417,13 +1422,14 @@ fun IosProtocolSegmentedControl(
 ) {
     Surface(
         modifier = Modifier.fillMaxWidth(),
-        shape = RoundedCornerShape(28.dp),
-        color = IosCardBg,
-        shadowElevation = 8.dp,
+        shape = RoundedCornerShape(16.dp),
+        color = Color(0xFF0D0F17),
+        border = BorderStroke(1.dp, Color(0xFF262C3D)),
+        shadowElevation = 0.dp,
         tonalElevation = 0.dp
     ) {
         Row(
-            modifier = Modifier.fillMaxWidth().background(IosCardBg).padding(4.dp),
+            modifier = Modifier.fillMaxWidth().background(Color(0xFF0D0F17)).padding(4.dp),
             horizontalArrangement = Arrangement.spacedBy(4.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
@@ -1431,7 +1437,7 @@ fun IosProtocolSegmentedControl(
                 val selected = proto == selectedProtocol
                 val itemEnabled = enabled && (allowedProtocols == null || proto in allowedProtocols)
                 val bg by animateColorAsState(targetValue = if (selected) IosActiveBlue else Color.Transparent, animationSpec = tween(250), label = "protoBg")
-                val textColor by animateColorAsState(targetValue = if (selected) Color.White else IosSecondaryLabel, animationSpec = tween(250), label = "protoText")
+                val textColor by animateColorAsState(targetValue = if (selected) Color.White else Color(0xFFCBD5E1), animationSpec = tween(250), label = "protoText")
                 val label = if (proto == AetherProtocol.ZERO_TRUST) "Z-TRUST" else proto.displayName.split(" ")[0].uppercase()
                 Box(
                     modifier = Modifier

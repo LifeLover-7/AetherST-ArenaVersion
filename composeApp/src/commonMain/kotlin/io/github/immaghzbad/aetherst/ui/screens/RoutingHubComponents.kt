@@ -20,7 +20,6 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -50,8 +49,8 @@ fun RoutingHubCard(
             .clip(RoundedCornerShape(20.dp))
             .clickable(enabled = enabled, onClick = onClick),
         shape = RoundedCornerShape(20.dp),
-        colors = CardDefaults.cardColors(containerColor = AppPalette.surfaceRaised),
-        border = CardDefaults.outlinedCardBorder().copy(brush = SolidColor(Color.White.copy(alpha = 0.08f)))
+        colors = CardDefaults.cardColors(containerColor = Color(0xFF141721)),
+        border = BorderStroke(1.dp, Color(0xFF262C3D))
     ) {
         Row(
             modifier = Modifier
@@ -69,13 +68,13 @@ fun RoutingHubCard(
                     modifier = Modifier
                         .size((36 * scaleFactor).dp)
                         .clip(RoundedCornerShape(10.dp))
-                        .background(AppPalette.accent.copy(alpha = 0.18f)),
+                        .background(Color(0xFF1D263B)),
                     contentAlignment = Alignment.Center
                 ) {
                     Icon(
                         imageVector = Icons.AutoMirrored.Filled.AltRoute,
                         contentDescription = null,
-                        tint = AppPalette.accent,
+                        tint = Color(0xFF38BDF8),
                         modifier = Modifier.size((20 * scaleFactor).dp)
                     )
                 }
@@ -100,25 +99,25 @@ fun RoutingHubCard(
                         val protoLabel = if (config.protocol == AetherProtocol.ZERO_TRUST) "Z-TRUST" else config.protocol.displayName.split(" ")[0].uppercase()
                         HubBadge(
                             text = protoLabel,
-                            bg = AppPalette.accent.copy(alpha = 0.2f),
-                            fg = AppPalette.accent,
+                            bg = Color(0xFF1E3A5F),
+                            fg = Color(0xFF60A5FA),
                             scaleFactor = scaleFactor
                         )
 
                         // Exit Node Badge
-                        val (exitLabel, exitColor) = when (config.exitNodeMode) {
-                            ExitNodeMode.DIRECT -> (if (isFa) "مستقیم" else "Direct") to AppPalette.textSecondary
+                        val (exitLabel, exitBg, exitFg) = when (config.exitNodeMode) {
+                            ExitNodeMode.DIRECT -> Triple(if (isFa) "مستقیم" else "Direct", Color(0xFF1E2330), Color(0xFFCBD5E1))
                             ExitNodeMode.PSIPHON_POOL -> {
                                 val reg = config.psiphonEgressRegion.trim().uppercase()
-                                (if (reg.isNotEmpty()) "سایفون ($reg)" else if (isFa) "سایفون" else "Psiphon") to Color(0xFF30B0C7)
+                                Triple(if (reg.isNotEmpty()) "سایفون ($reg)" else if (isFa) "سایفون" else "Psiphon", Color(0xFF163840), Color(0xFF38BDF8))
                             }
-                            ExitNodeMode.CUSTOM_WG -> (if (isFa) "وایرگارد" else "WireGuard") to AppPalette.statusConnected
-                            ExitNodeMode.CUSTOM_SOCKS5 -> (if (isFa) "ساکس ۵" else "SOCKS5") to Color(0xFFFF9F0A)
+                            ExitNodeMode.CUSTOM_WG -> Triple(if (isFa) "وایرگارد" else "WireGuard", Color(0xFF143825), Color(0xFF4ADE80))
+                            ExitNodeMode.CUSTOM_SOCKS5 -> Triple(if (isFa) "ساکس ۵" else "SOCKS5", Color(0xFF3D2E14), Color(0xFFFACC15))
                         }
                         HubBadge(
                             text = exitLabel,
-                            bg = exitColor.copy(alpha = 0.2f),
-                            fg = exitColor,
+                            bg = exitBg,
+                            fg = exitFg,
                             scaleFactor = scaleFactor
                         )
 
@@ -131,8 +130,8 @@ fun RoutingHubCard(
                             }
                             HubBadge(
                                 text = modeLabel,
-                                bg = Color.White.copy(alpha = 0.08f),
-                                fg = Color.White.copy(alpha = 0.7f),
+                                bg = Color(0xFF1E2330),
+                                fg = Color(0xFFCBD5E1),
                                 scaleFactor = scaleFactor
                             )
                         }
@@ -145,13 +144,13 @@ fun RoutingHubCard(
                 modifier = Modifier
                     .size((28 * scaleFactor).dp)
                     .clip(CircleShape)
-                    .background(AppPalette.divider.copy(alpha = 0.5f)),
+                    .background(Color(0xFF1A1F2C)),
                 contentAlignment = Alignment.Center
             ) {
                 Icon(
                     imageVector = Icons.AutoMirrored.Filled.KeyboardArrowRight,
                     contentDescription = null,
-                    tint = AppPalette.textSecondary,
+                    tint = Color(0xFF94A3B8),
                     modifier = Modifier.size((18 * scaleFactor).dp)
                 )
             }
@@ -203,7 +202,7 @@ fun RoutingModalDialog(
         Box(
             modifier = Modifier
                 .fillMaxSize()
-                .background(Color.Black.copy(alpha = 0.65f))
+                .background(Color.Black.copy(alpha = 0.75f))
                 .clickable(
                     interactionSource = remember { MutableInteractionSource() },
                     indication = null,
@@ -222,8 +221,8 @@ fun RoutingModalDialog(
                         onClick = {} // Consume click inside dialog
                     ),
                 shape = RoundedCornerShape(24.dp),
-                colors = CardDefaults.cardColors(containerColor = AppPalette.surfaceRaised),
-                border = BorderStroke(1.dp, Color.White.copy(alpha = 0.12f))
+                colors = CardDefaults.cardColors(containerColor = Color(0xFF0F1117)),
+                border = BorderStroke(1.dp, Color(0xFF262C3D))
             ) {
                 Column(
                     modifier = Modifier
@@ -243,13 +242,13 @@ fun RoutingModalDialog(
                                 modifier = Modifier
                                     .size((32 * scaleFactor).dp)
                                     .clip(RoundedCornerShape(8.dp))
-                                    .background(AppPalette.accent.copy(alpha = 0.2f)),
+                                    .background(Color(0xFF1D263B)),
                                 contentAlignment = Alignment.Center
                             ) {
                                 Icon(
                                     imageVector = Icons.AutoMirrored.Filled.AltRoute,
                                     contentDescription = null,
-                                    tint = AppPalette.accent,
+                                    tint = Color(0xFF38BDF8),
                                     modifier = Modifier.size((18 * scaleFactor).dp)
                                 )
                             }
@@ -263,7 +262,7 @@ fun RoutingModalDialog(
                                 )
                                 Text(
                                     text = strings.ROUTING_HUB_SUBTITLE,
-                                    color = AppPalette.textSecondary,
+                                    color = Color(0xFFCBD5E1),
                                     fontSize = (11 * scaleFactor).sp
                                 )
                             }
@@ -276,20 +275,20 @@ fun RoutingModalDialog(
                             Icon(
                                 imageVector = Icons.Default.Close,
                                 contentDescription = "Close",
-                                tint = AppPalette.textSecondary,
+                                tint = Color(0xFF94A3B8),
                                 modifier = Modifier.size((18 * scaleFactor).dp)
                             )
                         }
                     }
 
-                    HorizontalDivider(color = Color.White.copy(alpha = 0.08f), thickness = 1.dp)
+                    HorizontalDivider(color = Color(0xFF262C3D), thickness = 1.dp)
 
                     // Section 1: Primary Protocol
                     Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
                         Text(
                             text = strings.ROUTING_PRIMARY_PROTOCOL,
                             fontWeight = FontWeight.SemiBold,
-                            color = Color.White.copy(alpha = 0.85f),
+                            color = Color(0xFFE2E8F0),
                             fontSize = (12 * scaleFactor).sp
                         )
                         IosProtocolSegmentedControl(
@@ -305,7 +304,7 @@ fun RoutingModalDialog(
                         Text(
                             text = strings.ROUTING_EXIT_NODE,
                             fontWeight = FontWeight.SemiBold,
-                            color = Color.White.copy(alpha = 0.85f),
+                            color = Color(0xFFE2E8F0),
                             fontSize = (12 * scaleFactor).sp
                         )
                         ExitNodeCard(
@@ -324,7 +323,7 @@ fun RoutingModalDialog(
                             Text(
                                 text = strings.ROUTING_CONNECTION_MODE,
                                 fontWeight = FontWeight.SemiBold,
-                                color = Color.White.copy(alpha = 0.85f),
+                                color = Color(0xFFE2E8F0),
                                 fontSize = (12 * scaleFactor).sp
                             )
                             IosConnectionModeSegmentedControl(
@@ -358,4 +357,3 @@ fun RoutingModalDialog(
         }
     }
 }
-

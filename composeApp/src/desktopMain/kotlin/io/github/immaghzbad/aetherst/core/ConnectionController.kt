@@ -182,7 +182,9 @@ actual object ConnectionController {
                             }
                         }
                         if (_status.value != ConnectionStatus.STOPPED && s != ConnectionStatus.STOPPED) {
-                            if (_status.value != ConnectionStatus.RECONNECTING) {
+                            if (s == ConnectionStatus.RUNNING || s == ConnectionStatus.SOCKS_READY || s == ConnectionStatus.DATAPLANE_VALIDATED) {
+                                _status.value = ConnectionStatus.RUNNING
+                            } else if (_status.value != ConnectionStatus.RECONNECTING) {
                                 _status.value = s
                             }
                         }
@@ -317,16 +319,25 @@ actual object ConnectionController {
         private fun startWatchdog(effectiveConfig: AetherConfig, coreSocksPort: Int, actualHttpPort: Int) {
             watchdogJob?.cancel()
             watchdogJob = scope.launch {
+                var consecutiveFailures = 0
                 while (isActive && !isUserInitiatedStop) {
-                    delay(4000.milliseconds)
+                    delay(5000.milliseconds)
                     if (_status.value == ConnectionStatus.RUNNING && !isUserInitiatedStop) {
                         val portOk = probePort("127.0.0.1", coreSocksPort)
                         if (!portOk) {
-                            if (effectiveConfig.smartReconnect && !isUserInitiatedStop) {
-                                LogRepository.w("[Controller] Core port $coreSocksPort probe failed (network drop / mobile hotspot interrupt). Holding TUN interface...", "Watchdog")
-                                triggerPersistentReconnect(effectiveConfig, coreSocksPort, actualHttpPort)
+                            consecutiveFailures++
+                            LogRepository.w("[Controller] Core port $coreSocksPort probe failed ($consecutiveFailures/3)", "Watchdog")
+                            if (consecutiveFailures >= 3) {
+                                if (effectiveConfig.smartReconnect && !isUserInitiatedStop) {
+                                    LogRepository.w("[Controller] Core port $coreSocksPort probe failed 3 consecutive times. Holding TUN interface...", "Watchdog")
+                                    triggerPersistentReconnect(effectiveConfig, coreSocksPort, actualHttpPort)
+                                }
                             }
+                        } else {
+                            consecutiveFailures = 0
                         }
+                    } else {
+                        consecutiveFailures = 0
                     }
                 }
             }
@@ -503,7 +514,7 @@ actual object ConnectionController {
         private suspend fun probePort(host: String, port: Int): Boolean = withContext(Dispatchers.IO) {
             runCatching {
                 Socket().use {
-                    it.connect(InetSocketAddress(host, port), 500)
+                    it.connect(InetSocketAddress(host, port), 1500)
                     true
                 }
             }.getOrDefault(false)

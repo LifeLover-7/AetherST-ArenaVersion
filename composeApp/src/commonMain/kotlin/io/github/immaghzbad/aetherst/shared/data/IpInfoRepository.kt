@@ -116,18 +116,24 @@ object IpInfoRepository {
                             return@withContext
                         }
                     } else {
-                        delay(200.milliseconds)
-                        for (attempt in 1..3) {
-                            LogRepository.i("Querying public IP via tunnel ($socksHost:$socksPort) attempt $attempt...", "IpWhois")
+                        delay(400.milliseconds)
+                        for (attempt in 1..5) {
+                            LogRepository.i("Querying public IP via tunnel ($socksHost:$socksPort) attempt $attempt/5...", "IpWhois")
                             val rawResult = fetchParallelViaProxy(socksHost, socksPort, provider)
                             val result = enrichCountryIfMissing(rawResult, socksHost, socksPort)
-                            if (result != null) {
-                                _ipInfo.value = result
+                            if (result != null && result.ip.isNotEmpty()) {
+                                // If proxy returned IR IP on an early attempt, tunnel may still be completing egress handshake
+                                if (result.countryCode.uppercase() == "IR" && attempt < 3) {
+                                    LogRepository.w("Tunnel returned domestic IP on attempt $attempt, waiting for egress to settle...", "IpWhois")
+                                    delay(1000.milliseconds)
+                                    continue
+                                }
+                                _ipInfo.value = result.copy(isLoading = false, error = null)
                                 LogRepository.i("Tunnel IP: ${result.ip} (${result.country}) [${result.countryCode}]", "IpWhois")
                                 return@withContext
                             }
-                            if (attempt < 3) {
-                                delay((600L * attempt).milliseconds)
+                            if (attempt < 5) {
+                                delay((800L * attempt).milliseconds)
                             }
                         }
                         LogRepository.w("SOCKS proxy lookup failed after all attempts.", "IpWhois")
