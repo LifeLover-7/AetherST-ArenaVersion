@@ -837,6 +837,7 @@ object StringsEn : AppStrings {
     override val EXIT_NODE_PSIPHON_POOL_DESC = "3-4 parallel Psiphon instances load-balanced over primary tunnel"
     override val EXIT_NODE_CUSTOM_WG = "Custom WireGuard Exit"
     override val EXIT_NODE_CUSTOM_WG_DESC = "Nested WireGuard tunnel (Proton, Mullvad, IVPN) chained through primary"
+    override val EXIT_NODE_WG_UDP_ADVISORY = "WireGuard runs on raw UDP (port 51820), which is filtered in Iran. For a clean foreign exit IP for AI services, please select Psiphon (choose Netherlands or Germany) or SOCKS5."
     override val EXIT_NODE_CUSTOM_SOCKS5 = "Custom SOCKS5 Exit"
     override val EXIT_NODE_CUSTOM_SOCKS5_DESC = "Relay traffic inside primary tunnel to external SOCKS5 proxy"
     override val EXIT_NODE_CONFIGURE = "Configure"

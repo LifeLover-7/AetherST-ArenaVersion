@@ -1371,6 +1371,14 @@ fun ExitNodeCard(
                             modifier = Modifier.size(16.dp)
                         )
                     }
+                    Spacer(modifier = Modifier.height(4.dp))
+                    Text(
+                        text = strings.EXIT_NODE_WG_UDP_ADVISORY,
+                        color = Color(0xFFF59E0B),
+                        fontSize = (9.5 * scaleFactor).sp,
+                        lineHeight = (13 * scaleFactor).sp,
+                        modifier = Modifier.padding(horizontal = 4.dp)
+                    )
                 }
                 ExitNodeMode.CUSTOM_SOCKS5 -> {
                     val socksTarget = if (config.customSocks5Host.isNotBlank()) "${config.customSocks5Host}:${config.customSocks5Port}" else null

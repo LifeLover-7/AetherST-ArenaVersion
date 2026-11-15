@@ -837,6 +837,7 @@ interface AppStrings {
     val EXIT_NODE_PSIPHON_POOL_DESC: String
     val EXIT_NODE_CUSTOM_WG: String
     val EXIT_NODE_CUSTOM_WG_DESC: String
+    val EXIT_NODE_WG_UDP_ADVISORY: String
     val EXIT_NODE_CUSTOM_SOCKS5: String
     val EXIT_NODE_CUSTOM_SOCKS5_DESC: String
     val EXIT_NODE_CONFIGURE: String

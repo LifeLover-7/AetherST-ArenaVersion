@@ -135,6 +135,35 @@ fun CustomWireGuardDialog(
                         .weight(1f)
                         .verticalScroll(rememberScrollState())
                 ) {
+                    // Advisory Warning Banner
+                    Card(
+                        modifier = Modifier.fillMaxWidth(),
+                        shape = RoundedCornerShape(12.dp),
+                        colors = CardDefaults.cardColors(containerColor = Color(0xFFF59E0B).copy(alpha = 0.12f)),
+                        border = BorderStroke(1.dp, Color(0xFFF59E0B).copy(alpha = 0.4f))
+                    ) {
+                        Row(
+                            modifier = Modifier.padding(12.dp),
+                            verticalAlignment = Alignment.Top
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Error,
+                                contentDescription = null,
+                                tint = Color(0xFFF59E0B),
+                                modifier = Modifier.size(18.dp)
+                            )
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text(
+                                text = strings.EXIT_NODE_WG_UDP_ADVISORY,
+                                color = Color(0xFFFDE68A),
+                                fontSize = 11.sp,
+                                lineHeight = 16.sp
+                            )
+                        }
+                    }
+
+                    Spacer(modifier = Modifier.height(12.dp))
+
                     // Proton Auto-Import Primary Action Banner
                     Card(
                         modifier = Modifier
