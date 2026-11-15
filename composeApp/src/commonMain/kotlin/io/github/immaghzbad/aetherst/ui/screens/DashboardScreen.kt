@@ -345,9 +345,18 @@ fun DashboardScreen(
                 config = config,
                 onUpdateConfig = onUpdateConfig,
                 onUpdateProtocol = onUpdateProtocol,
-                onOpenPsiphonSheet = { showPsiphonSheet = true },
-                onOpenWgDialog = { showCustomWgDialog = true },
-                onOpenSocks5Dialog = { showCustomSocks5Dialog = true },
+                onOpenPsiphonSheet = {
+                    showRoutingModal = false
+                    showPsiphonSheet = true
+                },
+                onOpenWgDialog = {
+                    showRoutingModal = false
+                    showCustomWgDialog = true
+                },
+                onOpenSocks5Dialog = {
+                    showRoutingModal = false
+                    showCustomSocks5Dialog = true
+                },
                 onDismiss = { showRoutingModal = false },
                 scaleFactor = scaleFactor
             )
