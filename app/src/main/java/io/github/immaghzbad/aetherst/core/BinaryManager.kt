@@ -106,6 +106,59 @@ object BinaryManager {
         throw IOException("Aether core binary is missing or not executable for architecture: ${archInfo.abi}")
     }
 
+    @Synchronized
+    fun prepareSingBoxBinary(context: Context): File? {
+        val archInfo = runCatching { detectArchitecture() }.getOrNull()
+        val nativeLibDir = context.applicationInfo.nativeLibraryDir
+        val bundledBinary = File(nativeLibDir, "libsing-box.so")
+
+        if (bundledBinary.exists() && bundledBinary.isFile && bundledBinary.length() > 0) {
+            if (bundledBinary.canExecute()) return bundledBinary
+            try {
+                makeExecutable(bundledBinary)
+                if (bundledBinary.canExecute()) return bundledBinary
+            } catch (_: Exception) {}
+        }
+
+        val binDir = File(context.filesDir, "bin")
+        if (!binDir.exists()) binDir.mkdirs()
+
+        val targetFile = File(binDir, "sing-box")
+        if (targetFile.exists() && targetFile.length() > 0) {
+            if (targetFile.canExecute()) return targetFile
+            try {
+                makeExecutable(targetFile)
+                if (targetFile.canExecute()) return targetFile
+            } catch (_: Exception) {}
+        }
+
+        // Check if bundled inside APK zip
+        if (archInfo != null) {
+            try {
+                val apkFile = File(context.applicationInfo.sourceDir)
+                if (apkFile.exists() && apkFile.isFile) {
+                    java.util.zip.ZipFile(apkFile).use { zip ->
+                        val entryName = "lib/${archInfo.abi}/libsing-box.so"
+                        val entry = zip.getEntry(entryName)
+                        if (entry != null) {
+                            val tempFile = File(binDir, "sing-box.tmp")
+                            zip.getInputStream(entry).use { input ->
+                                tempFile.outputStream().use { output -> input.copyTo(output) }
+                            }
+                            makeExecutable(tempFile)
+                            if (tempFile.renameTo(targetFile) || (targetFile.delete() && tempFile.renameTo(targetFile))) {
+                                makeExecutable(targetFile)
+                                if (targetFile.canExecute()) return targetFile
+                            }
+                        }
+                    }
+                }
+            } catch (_: Exception) {}
+        }
+
+        return targetFile.takeIf { it.exists() && it.canExecute() }
+    }
+
     private fun makeExecutable(file: File) {
         try {
             val pb = ProcessBuilder("chmod", "700", file.absolutePath)

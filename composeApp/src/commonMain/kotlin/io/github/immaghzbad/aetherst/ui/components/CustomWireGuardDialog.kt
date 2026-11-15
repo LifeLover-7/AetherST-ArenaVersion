@@ -39,8 +39,11 @@ import io.github.immaghzbad.aetherst.shared.util.WireGuardConfigParser
 @Composable
 fun CustomWireGuardDialog(
     initialConfig: CustomWireGuardConfig,
+    profiles: List<CustomWireGuardConfig> = emptyList(),
+    autoSelect: Boolean = false,
     connectionStatus: ConnectionStatus = ConnectionStatus.STOPPED,
-    onSave: (CustomWireGuardConfig) -> Unit,
+    onSave: (CustomWireGuardConfig) -> Unit = {},
+    onSaveAll: ((CustomWireGuardConfig, List<CustomWireGuardConfig>, Boolean) -> Unit)? = null,
     onDismiss: () -> Unit,
     onSuccessToast: ((String) -> Unit)? = null
 ) {
@@ -395,7 +398,20 @@ fun CustomWireGuardDialog(
                             } else {
                                 parsedConfig
                             }
-                            onSave(finalCfg)
+                            if (onSaveAll != null) {
+                                val updatedProfiles = if (profiles.isNotEmpty()) {
+                                    if (profiles.any { it.endpoint == finalCfg.endpoint }) {
+                                        profiles.map { if (it.endpoint == finalCfg.endpoint) finalCfg else it }
+                                    } else {
+                                        profiles + finalCfg
+                                    }
+                                } else {
+                                    listOf(finalCfg)
+                                }
+                                onSaveAll(finalCfg, updatedProfiles, autoSelect)
+                            } else {
+                                onSave(finalCfg)
+                            }
                             onDismiss()
                         },
                         modifier = Modifier.weight(1f).height(46.dp),

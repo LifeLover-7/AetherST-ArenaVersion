@@ -852,6 +852,12 @@ interface AppStrings {
     val EXIT_NODE_WG_MTU: String
     val EXIT_NODE_WG_PUBLIC_KEY: String
     val EXIT_NODE_WG_ALLOWED_IPS: String
+    val EXIT_NODE_WG_PROFILES: String
+    val EXIT_NODE_WG_ADD_PROFILE: String
+    val EXIT_NODE_WG_PROFILE_NAME: String
+    val EXIT_NODE_WG_AUTO_SELECT: String
+    val EXIT_NODE_WG_AUTO_SELECT_DESC: String
+    val EXIT_NODE_WG_DELETE: String
     val EXIT_NODE_SOCKS5_DIALOG_TITLE: String
     val EXIT_NODE_SOCKS5_HOST: String
     val EXIT_NODE_SOCKS5_PORT: String

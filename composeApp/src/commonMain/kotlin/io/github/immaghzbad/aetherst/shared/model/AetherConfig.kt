@@ -79,6 +79,8 @@ enum class ExitNodeMode(val rawValue: String, val displayName: String) {
 
 @Serializable
 data class CustomWireGuardConfig(
+    val id: String = "",
+    val name: String = "",
     val rawConfig: String = "",
     val privateKey: String = "",
     val addressV4: String = "",
@@ -89,9 +91,11 @@ data class CustomWireGuardConfig(
     val endpoint: String = "",
     val allowedIpsV4: String = "0.0.0.0/0",
     val allowedIpsV6: String = "::/0",
-    val persistentKeepalive: Int = 25
+    val persistentKeepalive: Int = 25,
+    val lastPingMs: Long = -1L
 ) {
     fun isValid(): Boolean = privateKey.isNotBlank() && publicKey.isNotBlank() && endpoint.isNotBlank()
+    val displayName: String get() = name.ifBlank { endpoint.ifBlank { "Proton WireGuard" } }
     val dnsServers: List<String> get() = dns.split(",").map { it.trim() }.filter { it.isNotEmpty() }
     fun filterForPrimarySupport(supportsIpv6: Boolean): CustomWireGuardConfig {
         return if (supportsIpv6) {
@@ -299,6 +303,8 @@ data class AetherConfig(
     val appTheme: String = "default",
     val exitNodeMode: ExitNodeMode = ExitNodeMode.DIRECT,
     val customWgConfig: CustomWireGuardConfig = CustomWireGuardConfig(),
+    val customWgProfiles: List<CustomWireGuardConfig> = emptyList(),
+    val customWgAutoSelect: Boolean = false,
     val customSocks5Host: String = "",
     val customSocks5Port: Int = 1080,
     val customSocks5Username: String = "",

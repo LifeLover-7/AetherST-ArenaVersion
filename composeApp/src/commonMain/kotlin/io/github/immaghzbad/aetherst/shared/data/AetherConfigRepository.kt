@@ -214,6 +214,8 @@ class AetherConfigRepository private constructor(private val settings: Settings)
             tunneledPackages = settings.getStringSet("${prefix}tunneled_packages", emptySet()),
             exitNodeMode = sanitizeExitNodeMode(settings.getString("${prefix}exit_node_mode", ExitNodeMode.DIRECT.name)),
             customWgConfig = loadCustomWgConfig(prefix),
+            customWgProfiles = loadCustomWgProfiles(prefix),
+            customWgAutoSelect = settings.getBoolean("${prefix}custom_wg_auto_select", false),
             customSocks5Host = settings.getString("${prefix}custom_socks5_host", ""),
             customSocks5Port = settings.getInt("${prefix}custom_socks5_port", 1080),
             customSocks5Username = settings.getString("${prefix}custom_socks5_username", ""),
@@ -227,6 +229,8 @@ class AetherConfigRepository private constructor(private val settings: Settings)
 
     private fun loadCustomWgConfig(prefix: String): CustomWireGuardConfig {
         return CustomWireGuardConfig(
+            id = settings.getString("${prefix}custom_wg_id", ""),
+            name = settings.getString("${prefix}custom_wg_name", ""),
             rawConfig = settings.getString("${prefix}custom_wg_raw", ""),
             privateKey = settings.getString("${prefix}custom_wg_privkey", ""),
             addressV4 = settings.getString("${prefix}custom_wg_addr_v4", ""),
@@ -242,6 +246,8 @@ class AetherConfigRepository private constructor(private val settings: Settings)
     }
 
     private fun saveCustomWgConfig(prefix: String, wg: CustomWireGuardConfig) {
+        settings.putString("${prefix}custom_wg_id", wg.id)
+        settings.putString("${prefix}custom_wg_name", wg.name)
         settings.putString("${prefix}custom_wg_raw", wg.rawConfig)
         settings.putString("${prefix}custom_wg_privkey", wg.privateKey)
         settings.putString("${prefix}custom_wg_addr_v4", wg.addressV4)
@@ -253,6 +259,24 @@ class AetherConfigRepository private constructor(private val settings: Settings)
         settings.putString("${prefix}custom_wg_allowed_v4", wg.allowedIpsV4)
         settings.putString("${prefix}custom_wg_allowed_v6", wg.allowedIpsV6)
         settings.putInt("${prefix}custom_wg_keepalive", wg.persistentKeepalive)
+    }
+
+    private fun loadCustomWgProfiles(prefix: String): List<CustomWireGuardConfig> {
+        val rawJson = settings.getString("${prefix}custom_wg_profiles_json", "")
+        if (rawJson.isNotBlank()) {
+            try {
+                return Json.decodeFromString(rawJson)
+            } catch (_: Exception) {}
+        }
+        val single = loadCustomWgConfig(prefix)
+        return if (single.isValid()) listOf(single) else emptyList()
+    }
+
+    private fun saveCustomWgProfiles(prefix: String, profiles: List<CustomWireGuardConfig>) {
+        try {
+            val rawJson = Json.encodeToString(profiles)
+            settings.putString("${prefix}custom_wg_profiles_json", rawJson)
+        } catch (_: Exception) {}
     }
 
     private fun sanitizeHevLogLevel(value: String): String {
@@ -501,6 +525,8 @@ class AetherConfigRepository private constructor(private val settings: Settings)
         settings.putStringSet("${prefix}tunneled_packages", cfg.tunneledPackages)
         settings.putString("${prefix}exit_node_mode", cfg.exitNodeMode.name)
         saveCustomWgConfig(prefix, cfg.customWgConfig)
+        saveCustomWgProfiles(prefix, cfg.customWgProfiles)
+        settings.putBoolean("${prefix}custom_wg_auto_select", cfg.customWgAutoSelect)
         settings.putString("${prefix}custom_socks5_host", cfg.customSocks5Host)
         settings.putInt("${prefix}custom_socks5_port", cfg.customSocks5Port)
         settings.putString("${prefix}custom_socks5_username", cfg.customSocks5Username)

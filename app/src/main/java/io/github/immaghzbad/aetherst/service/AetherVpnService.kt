@@ -856,14 +856,18 @@ class AetherVpnService : VpnService() {
             }
             ExitNodeMode.CUSTOM_WG -> {
                 val localPort = 10805
-                val wgCfg = config.customWgConfig
-                if (wgCfg.isValid()) {
+                val targetWgCfg = if (config.customWgAutoSelect && config.customWgProfiles.isNotEmpty()) {
+                    WireGuardExitTunnel.selectFastestProfile(config.customWgProfiles, config.customWgConfig)
+                } else {
+                    config.customWgConfig
+                }
+                if (targetWgCfg.isValid()) {
                     if (wgExitTunnel == null) {
                         val primaryPort = config.socksPort.toIntOrNull() ?: 2021
-                        val binaryFile = io.github.immaghzbad.aetherst.core.BinaryManager.prepareBinary(this@AetherVpnService)
+                        val binaryFile = io.github.immaghzbad.aetherst.core.BinaryManager.prepareSingBoxBinary(this@AetherVpnService)
                         val tunnel = WireGuardExitTunnel(
-                            config = wgCfg,
-                            binaryPath = binaryFile.absolutePath,
+                            config = targetWgCfg,
+                            binaryPath = binaryFile?.absolutePath,
                             workingDir = filesDir.absolutePath,
                             primarySocksHost = "127.0.0.1",
                             primarySocksPort = primaryPort,
@@ -873,9 +877,10 @@ class AetherVpnService : VpnService() {
                         if (started) {
                             wgExitTunnel = tunnel
                             ActiveProxyProvider.customWgPort = localPort
+                            LogRepository.i("[VpnService] WireGuard exit node active on port $localPort (Verified IP: ${tunnel.verifiedExitIp})")
                             return "127.0.0.1" to localPort
                         } else {
-                            LogRepository.w("[VpnService] Custom WG start failed, falling back to direct primary socks")
+                            LogRepository.w("[VpnService] Custom WG start or verification failed, falling back to direct primary socks")
                             return "127.0.0.1" to (config.socksPort.toIntOrNull() ?: 2021)
                         }
                     }

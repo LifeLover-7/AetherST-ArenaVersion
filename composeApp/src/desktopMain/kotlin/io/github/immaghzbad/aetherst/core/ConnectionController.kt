@@ -260,13 +260,22 @@ actual object ConnectionController {
                     throw IllegalStateException("Psiphon exit node failed to launch")
                 }
             } else if (effectiveConfig.exitNodeMode == ExitNodeMode.CUSTOM_WG) {
-                val wgCfg = effectiveConfig.customWgConfig
-                if (wgCfg.isValid()) {
-                    val binaryPath = io.github.immaghzbad.aetherst.shared.core.getBinaryManager(context).prepareBinary("aether")
+                val targetWgCfg = if (effectiveConfig.customWgAutoSelect && effectiveConfig.customWgProfiles.isNotEmpty()) {
+                    io.github.immaghzbad.aetherst.shared.net.WireGuardExitTunnel.selectFastestProfile(
+                        effectiveConfig.customWgProfiles,
+                        effectiveConfig.customWgConfig
+                    )
+                } else {
+                    effectiveConfig.customWgConfig
+                }
+                if (targetWgCfg.isValid()) {
+                    val binaryPath = runCatching {
+                        io.github.immaghzbad.aetherst.shared.core.getBinaryManager(context).prepareBinary("sing-box")
+                    }.getOrNull()
                     val workDir = System.getProperty("user.home") + "/.aether"
                     java.io.File(workDir).mkdirs()
                     val tunnel = io.github.immaghzbad.aetherst.shared.net.WireGuardExitTunnel(
-                        config = wgCfg,
+                        config = targetWgCfg,
                         binaryPath = binaryPath,
                         workingDir = workDir,
                         primarySocksHost = "127.0.0.1",
@@ -278,9 +287,9 @@ actual object ConnectionController {
                         wgExitTunnel = tunnel
                         effectiveTargetPort = 10805
                         ActiveProxyProvider.customWgPort = 10805
-                        LogRepository.i("[Controller] Custom WireGuard Exit ready on port 10805", "WireGuard")
+                        LogRepository.i("[Controller] Custom WireGuard Exit ready on port 10805 (Exit IP: ${tunnel.verifiedExitIp ?: "Active"})", "WireGuard")
                     } else {
-                        LogRepository.w("[Controller] Custom WireGuard start failed, keeping primary tunnel on port $coreSocksPort", "WireGuard")
+                        LogRepository.w("[Controller] Custom WireGuard start or verification failed, falling back to primary tunnel on port $coreSocksPort", "WireGuard")
                         effectiveTargetPort = coreSocksPort
                         ActiveProxyProvider.customWgPort = coreSocksPort
                     }
@@ -397,22 +406,32 @@ actual object ConnectionController {
                         if (ready) {
                             if (effectiveConfig.exitNodeMode == ExitNodeMode.CUSTOM_WG && wgExitTunnel == null) {
                                 try {
-                                    val wgCfg = effectiveConfig.customWgConfig
-                                    if (wgCfg.isValid()) {
-                                        val binaryPath = io.github.immaghzbad.aetherst.shared.core.getBinaryManager(context).prepareBinary("aether")
+                                    val targetWgCfg = if (effectiveConfig.customWgAutoSelect && effectiveConfig.customWgProfiles.isNotEmpty()) {
+                                        io.github.immaghzbad.aetherst.shared.net.WireGuardExitTunnel.selectFastestProfile(
+                                            effectiveConfig.customWgProfiles,
+                                            effectiveConfig.customWgConfig
+                                        )
+                                    } else {
+                                        effectiveConfig.customWgConfig
+                                    }
+                                    if (targetWgCfg.isValid()) {
+                                        val binaryPath = runCatching {
+                                            io.github.immaghzbad.aetherst.shared.core.getBinaryManager(context).prepareBinary("sing-box")
+                                        }.getOrNull()
                                         val workDir = System.getProperty("user.home") + "/.aether"
                                         java.io.File(workDir).mkdirs()
                                         val tunnel = io.github.immaghzbad.aetherst.shared.net.WireGuardExitTunnel(
-                                            config = wgCfg,
+                                            config = targetWgCfg,
                                             binaryPath = binaryPath,
                                             workingDir = workDir,
                                             primarySocksHost = "127.0.0.1",
                                             primarySocksPort = coreSocksPort,
                                             localListenPort = 10805
                                         )
-                                        tunnel.start()
-                                        wgExitTunnel = tunnel
-                                        ActiveProxyProvider.customWgPort = 10805
+                                        if (tunnel.start()) {
+                                            wgExitTunnel = tunnel
+                                            ActiveProxyProvider.customWgPort = 10805
+                                        }
                                     }
                                 } catch (_: Throwable) {}
                             } else if (effectiveConfig.exitNodeMode == ExitNodeMode.CUSTOM_SOCKS5 && customSocksRelay == null) {

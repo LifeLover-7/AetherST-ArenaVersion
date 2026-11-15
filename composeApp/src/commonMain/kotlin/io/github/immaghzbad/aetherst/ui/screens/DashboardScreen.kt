@@ -380,9 +380,20 @@ fun DashboardScreen(
         if (showCustomWgDialog) {
             CustomWireGuardDialog(
                 initialConfig = config.customWgConfig,
+                profiles = config.customWgProfiles,
+                autoSelect = config.customWgAutoSelect,
                 connectionStatus = connectionStatus,
                 onSave = { updatedWg ->
                     onUpdateConfig(config.copy(customWgConfig = updatedWg))
+                },
+                onSaveAll = { updatedWg, updatedProfiles, updatedAutoSelect ->
+                    onUpdateConfig(
+                        config.copy(
+                            customWgConfig = updatedWg,
+                            customWgProfiles = updatedProfiles,
+                            customWgAutoSelect = updatedAutoSelect
+                        )
+                    )
                 },
                 onDismiss = { showCustomWgDialog = false },
                 onSuccessToast = { msg -> onShowToast(msg, false) }
