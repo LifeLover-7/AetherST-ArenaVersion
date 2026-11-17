@@ -224,7 +224,7 @@ actual object ConnectionController {
 
             var effectiveTargetPort = coreSocksPort
             isPsiphonActive = false
-            if (PsiphonController.isSupported(effectiveConfig)) {
+            if (effectiveConfig.exitNodeMode == ExitNodeMode.PSIPHON_POOL && PsiphonController.isSupported(effectiveConfig)) {
                 _status.value = ConnectionStatus.VALIDATING
                 val upstreamUrl = "http://127.0.0.1:$actualHttpPort"
                 LogRepository.i("[Controller] Chaining Psiphon over HTTP proxy $upstreamUrl", "Psiphon")
@@ -489,12 +489,19 @@ actual object ConnectionController {
             if (tunnelModeStarted) return
             tunnelModeStarted = true
             val effectiveMtu = 1280.coerceAtMost(config.mtu.coerceIn(576, 9000))
+            val directIps = if (config.bypassIran || config.routingRules.any { it.mode == RoutingMode.DIRECT }) {
+                config.routingRules.filter { it.mode == RoutingMode.DIRECT && (it.pattern.startsWith("ip:") || it.pattern.matches(Regex(""^\d+\.\d+\.\d+\.\d+.*""))) }
+                    .map { it.pattern.removePrefix("ip:").trim() }
+            } else {
+                emptyList()
+            }
             TunHelper.start(
                 socksTargetPort = targetPort,
                 configuredMtu = effectiveMtu,
                 bypassExes = config.excludedPackages,
                 blockedExes = config.blockedPackages,
-                tunnelAllApps = config.tunnelAllApps
+                tunnelAllApps = config.tunnelAllApps,
+                directIps = directIps
             )
             LogRepository.i("[Controller] TUN helper started on port $targetPort, mtu=$effectiveMtu, bypass=${config.excludedPackages.size}, blocked=${config.blockedPackages.size}")
         }

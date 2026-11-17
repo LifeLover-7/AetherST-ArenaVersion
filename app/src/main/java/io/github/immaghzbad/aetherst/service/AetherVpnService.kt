@@ -374,9 +374,9 @@ class AetherVpnService : VpnService() {
                 val config = AetherConfigRepository.getInstance(getSettings(PlatformContext(this@AetherVpnService))).config.value
                 routingEngine = RoutingEngine(config.routingRules)
 
-                val hasDomainRules = config.routingRules.any { it.mode == RoutingMode.BLOCK || it.mode == RoutingMode.DIRECT }
+                val hasDomainRules = config.routingRules.any { it.mode == RoutingMode.BLOCK || it.mode == RoutingMode.DIRECT } || config.bypassIran
                 val effectiveEngine = if (
-                    !config.tunnelAllApps && config.tunnelEngine == TunnelEngine.HEV_TUN2SOCKS && hasDomainRules
+                    hasDomainRules && config.tunnelEngine == TunnelEngine.HEV_TUN2SOCKS
                 ) {
                     TunnelEngine.SOCKS_TUN_BRIDGE
                 } else {
@@ -390,6 +390,11 @@ class AetherVpnService : VpnService() {
                     throw IllegalStateException("Core failed to start")
                 }
                 ensureCurrentAttempt(attemptId)
+
+                if (config.exitNodeMode == ExitNodeMode.DIRECT) {
+                    ActiveProxyProvider.psiphonProxyUrl = null
+                    ActiveProxyProvider.customWgPort = null
+                }
 
                 // گام ۱.۵: راه‌اندازی سایفون در صورت فعال بودن ExitNodeMode.PSIPHON_POOL
                 if (config.exitNodeMode == ExitNodeMode.PSIPHON_POOL && !PsiphonController.isRunning()) {
@@ -839,12 +844,7 @@ class AetherVpnService : VpnService() {
 
         when (config.exitNodeMode) {
             ExitNodeMode.DIRECT -> {
-                val isLegacyPsiphon = psiphonUrl?.contains("3080") == true || config.upstreamProxy.contains("3080") || config.chainProvider == ChainProvider.PSIPHON
-                if (isLegacyPsiphon) {
-                    val port = psiphonUrl?.substringAfterLast(":")?.toIntOrNull() ?: 3080
-                    return "127.0.0.1" to port
-                }
-                val host = config.socksHost
+                val host = config.socksHost.ifBlank { "127.0.0.1" }
                 val port = config.socksPort.toIntOrNull() ?: 2021
                 return host to port
             }

@@ -46,7 +46,7 @@ object TunHelper {
             val dataDirFile = File(dataDir)
 
             File(dataDir, HEV_YAML).writeText(buildHevConfig(socksTargetPort, safeMtu))
-            writeParams(socksTargetPort, dataDirFile, safeMtu, bypassExes, blockedExes, tunnelAllApps)
+            writeParams(socksTargetPort, dataDirFile, safeMtu, bypassExes, blockedExes, tunnelAllApps, directIps)
             File(dataDir, STOP_FLAG).delete()
             writeHelperScript(dataDirFile)
 
@@ -153,8 +153,9 @@ object TunHelper {
         val validBlocked = blockedExes.filter { it.isNotBlank() && it.endsWith(".exe", ignoreCase = true) }
         val bypassJson = validBypass.joinToString(",") { "\"${it.replace("\\", "\\\\").replace("\"", "\\\"")}\"" }
         val blockedJson = validBlocked.joinToString(",") { "\"${it.replace("\\", "\\\\").replace("\"", "\\\"")}\"" }
+        val directIpsJson = directIps.filter { it.isNotBlank() }.joinToString(",") { "\"${it.replace("\\", "\\\\").replace("\"", "\\\"")}\"" }
         val json = """
-            {"tunName":"$TUN_NAME","tunIp":"$TUN_IPV4","dnsFake":"$DNS_FAKE","socksPort":$socksTargetPort,"targetSocksPort":$socksTargetPort,"mtu":$mtu,"endpointIps":[$endpointIps],"bypassExes":[$bypassJson],"blockedExes":[$blockedJson],"tunnelAllApps":$tunnelAllApps}
+            {"tunName":"$TUN_NAME","tunIp":"$TUN_IPV4","dnsFake":"$DNS_FAKE","socksPort":$socksTargetPort,"targetSocksPort":$socksTargetPort,"mtu":$mtu,"endpointIps":[$endpointIps],"bypassExes":[$bypassJson],"blockedExes":[$blockedJson],"tunnelAllApps":$tunnelAllApps,"directIps":[$directIpsJson]}
         """.trimIndent()
         File(dataDir, PARAMS_FILE).writeText(json)
     }
