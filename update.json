@@ -1,7 +1,7 @@
 {
-  "version": "2.0.0",
-  "version_code": 20,
+  "version": "2.1.1",
+  "version_code": 22,
   "is_beta": false,
-  "changelog": "Aether Core v2.4.0, ultra size reduction, and dedicated MCI (Hamrah-e Aval) profile.",
-  "release_url": "https://github.com/LifeLover-7/AetherST/releases/tag/v2.0.0-android"
+  "changelog": "WireGuard exit node with userspace sing-box detour, data plane verification, concurrent latency probe, and direct IP routing.",
+  "release_url": "https://github.com/LifeLover-7/AetherST-Private/releases/tag/v2.1.1"
 }
