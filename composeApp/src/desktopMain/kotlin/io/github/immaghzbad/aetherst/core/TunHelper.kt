@@ -29,7 +29,8 @@ object TunHelper {
         configuredMtu: Int = DEFAULT_TUN_MTU,
         bypassExes: Set<String> = emptySet(),
         blockedExes: Set<String> = emptySet(),
-        tunnelAllApps: Boolean = true
+        tunnelAllApps: Boolean = true,
+        directIps: List<String> = emptyList()
     ) {
         if (isRunning.getAndSet(true)) return
         targetSocksPort = socksTargetPort
@@ -145,7 +146,8 @@ object TunHelper {
         mtu: Int,
         bypassExes: Set<String> = emptySet(),
         blockedExes: Set<String> = emptySet(),
-        tunnelAllApps: Boolean = true
+        tunnelAllApps: Boolean = true,
+        directIps: List<String> = emptyList()
     ) {
         val endpointIps = collectEndpointIps().joinToString(",") { "\"$it\"" }
         // فقط مسیرهای معتبر .exe روی ویندوز را پاس می‌دهیم

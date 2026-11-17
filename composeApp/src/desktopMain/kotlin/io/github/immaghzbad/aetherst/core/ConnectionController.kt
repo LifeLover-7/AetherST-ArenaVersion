@@ -490,7 +490,7 @@ actual object ConnectionController {
             tunnelModeStarted = true
             val effectiveMtu = 1280.coerceAtMost(config.mtu.coerceIn(576, 9000))
             val directIps = if (config.bypassIran || config.routingRules.any { it.mode == RoutingMode.DIRECT }) {
-                config.routingRules.filter { it.mode == RoutingMode.DIRECT && (it.pattern.startsWith("ip:") || it.pattern.matches(Regex(""^\d+\.\d+\.\d+\.\d+.*""))) }
+                config.routingRules.filter { it.mode == RoutingMode.DIRECT && (it.pattern.startsWith("ip:") || it.pattern.matches(Regex("""^\d+\.\d+\.\d+\.\d+.*"""))) }
                     .map { it.pattern.removePrefix("ip:").trim() }
             } else {
                 emptyList()
