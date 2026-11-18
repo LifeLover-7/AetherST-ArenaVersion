@@ -4,4 +4,5 @@ object ActiveProxyProvider {
     var psiphonProxyUrl: String? = null
     var torProxyUrl: String? = null
     var customWgPort: Int? = null
+    var firefoxVpnPort: Int? = null
 }

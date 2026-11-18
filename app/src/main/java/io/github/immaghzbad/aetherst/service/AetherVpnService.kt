@@ -77,6 +77,7 @@ class AetherVpnService : VpnService() {
     private var activeTunnelEngine: TunnelEngine? = null
     private var customSocksRelay: CustomSocks5Relay? = null
     private var wgExitTunnel: WireGuardExitTunnel? = null
+    private var firefoxVpnTunnel: io.github.immaghzbad.aetherst.shared.net.FirefoxVpnExitTunnel? = null
 
     private var wakeLock: PowerManager.WakeLock? = null
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
@@ -691,6 +692,9 @@ class AetherVpnService : VpnService() {
                 wgExitTunnel?.stop()
                 wgExitTunnel = null
                 ActiveProxyProvider.customWgPort = null
+                firefoxVpnTunnel?.stop()
+                firefoxVpnTunnel = null
+                ActiveProxyProvider.firefoxVpnPort = null
                 customSocksRelay?.stop()
                 customSocksRelay = null
                 try { PsiphonController.stop() } catch (_: Throwable) {}
@@ -919,6 +923,34 @@ class AetherVpnService : VpnService() {
                     LogRepository.w("[VpnService] Custom SOCKS5 host blank, falling back to direct primary socks")
                     return "127.0.0.1" to (config.socksPort.toIntOrNull() ?: 2021)
                 }
+            }
+            ExitNodeMode.FIREFOX_VPN -> {
+                val localPort = config.firefoxVpnPort
+                if (firefoxVpnTunnel == null) {
+                    val primaryPort = config.socksPort.toIntOrNull() ?: 2021
+                    val binaryFile = io.github.immaghzbad.aetherst.core.BinaryManager.prepareSingBoxBinary(this@AetherVpnService)
+                    val tunnel = io.github.immaghzbad.aetherst.shared.net.FirefoxVpnExitTunnel(
+                        token = config.firefoxVpnToken,
+                        country = config.firefoxVpnCountry,
+                        binaryPath = binaryFile?.absolutePath,
+                        workingDir = filesDir.absolutePath,
+                        primarySocksHost = "127.0.0.1",
+                        primarySocksPort = primaryPort,
+                        localListenPort = localPort
+                    )
+                    val started = runCatching { tunnel.start() }.getOrDefault(false)
+                    if (started) {
+                        firefoxVpnTunnel = tunnel
+                        ActiveProxyProvider.firefoxVpnPort = localPort
+                        LogRepository.i("[VpnService] Firefox VPN exit node active on port $localPort (Verified IP: ${tunnel.verifiedExitIp})")
+                        return "127.0.0.1" to localPort
+                    } else {
+                        LogRepository.w("[VpnService] Firefox VPN start failed, falling back to direct primary socks")
+                        return "127.0.0.1" to (config.socksPort.toIntOrNull() ?: 2021)
+                    }
+                }
+                ActiveProxyProvider.firefoxVpnPort = localPort
+                return "127.0.0.1" to localPort
             }
         }
     }

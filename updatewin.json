@@ -1,7 +1,7 @@
 {
-  "version": "2.1.1",
-  "version_code": 22,
+  "version": "2.1.2",
+  "version_code": 23,
   "is_beta": false,
-  "changelog": "WireGuard exit node with userspace sing-box detour, data plane verification, concurrent latency probe, and direct IP routing.",
-  "release_url": "https://github.com/LifeLover-7/AetherST-Private/releases/tag/v2.1.1"
+  "changelog": "All protocols restored (WireGuard Direct, Psiphon Multi-Core, WireGuard + WireGuard Proton), dual-protocol system proxy, UPX binary compression, and Firefox VPN exit node chaining.",
+  "release_url": "https://github.com/LifeLover-7/AetherST-Private/releases/tag/v2.1.2"
 }

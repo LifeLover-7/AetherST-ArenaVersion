@@ -113,6 +113,7 @@ fun RoutingHubCard(
                             }
                             ExitNodeMode.CUSTOM_WG -> Triple(if (isFa) "وایرگارد" else "WireGuard", Color(0xFF143825), Color(0xFF4ADE80))
                             ExitNodeMode.CUSTOM_SOCKS5 -> Triple(if (isFa) "ساکس ۵" else "SOCKS5", Color(0xFF3D2E14), Color(0xFFFACC15))
+                            ExitNodeMode.FIREFOX_VPN -> Triple(if (isFa) "فایرفاکس" else "Firefox", Color(0xFF381E14), Color(0xFFFF944D))
                         }
                         HubBadge(
                             text = exitLabel,
@@ -190,6 +191,7 @@ fun RoutingModalDialog(
     onOpenPsiphonSheet: () -> Unit,
     onOpenWgDialog: () -> Unit,
     onOpenSocks5Dialog: () -> Unit,
+    onOpenFirefoxVpnDialog: () -> Unit = {},
     onDismiss: () -> Unit,
     scaleFactor: Float = 1f
 ) {
@@ -313,6 +315,7 @@ fun RoutingModalDialog(
                             onOpenPsiphonSheet = onOpenPsiphonSheet,
                             onOpenWgDialog = onOpenWgDialog,
                             onOpenSocks5Dialog = onOpenSocks5Dialog,
+                            onOpenFirefoxVpnDialog = onOpenFirefoxVpnDialog,
                             scaleFactor = scaleFactor
                         )
                     }

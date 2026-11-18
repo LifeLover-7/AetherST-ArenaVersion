@@ -864,6 +864,15 @@ object StringsFa : AppStrings {
     override val EXIT_NODE_SOCKS5_USER = "نام کاربری (اختیاری)"
     override val EXIT_NODE_SOCKS5_PASS = "رمز عبور (اختیاری)"
 
+    override val EXIT_NODE_FIREFOX_VPN = "وی‌پی‌ان فایرفاکس (Mozilla / Fastly)"
+    override val EXIT_NODE_FIREFOX_VPN_DESC = "هدایت دو مرحله‌ای ترافیک از لبه Fastly موزیلا بر روی تانل اولیه"
+    override val EXIT_NODE_FIREFOX_DIALOG_TITLE = "تنظیمات خروجی Firefox VPN"
+    override val EXIT_NODE_FIREFOX_TOKEN = "توکن اتصال موزیلا (FxA / ProxyPass Token)"
+    override val EXIT_NODE_FIREFOX_TOKEN_DESC = "توکن احراز هویت سرویس فایرفاکس یا پروکسی‌پس گاردین"
+    override val EXIT_NODE_FIREFOX_COUNTRY = "کشور سرور خروجی (مثلاً us, de, gb, fr, nl, ca)"
+    override val EXIT_NODE_FIREFOX_PORT = "پورت محلی پروکسی فایرفاکس"
+    override val EXIT_NODE_FIREFOX_ACCOUNT = "ایمیل اکانت موزیلا (اختیاری)"
+
     override val PROTON_IMPORT_BUTTON = "دریافت خودکار از پروتون (Proton VPN)"
     override val PROTON_CONNECT_PRIMARY_FIRST_TITLE = "ابتدا تانل اول را روشن کنید"
     override val PROTON_CONNECT_PRIMARY_FIRST_DESC = "سایت پروتون فیلتر است. برای باز شدن صفحه لاگین و دریافت کانفیگ بدون مشکل، ابتدا تانل اصلی (AetherST) را متصل کنید. آیا مایلید به هر حال باز شود؟"

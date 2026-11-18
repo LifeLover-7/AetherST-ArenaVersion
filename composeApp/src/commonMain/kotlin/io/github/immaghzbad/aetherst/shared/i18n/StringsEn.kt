@@ -864,6 +864,15 @@ object StringsEn : AppStrings {
     override val EXIT_NODE_SOCKS5_USER = "Username (Optional)"
     override val EXIT_NODE_SOCKS5_PASS = "Password (Optional)"
 
+    override val EXIT_NODE_FIREFOX_VPN = "Firefox VPN (Mozilla / Fastly)"
+    override val EXIT_NODE_FIREFOX_VPN_DESC = "Egress via Mozilla Fastly edge proxy chained through primary tunnel"
+    override val EXIT_NODE_FIREFOX_DIALOG_TITLE = "Firefox VPN Exit Node Config"
+    override val EXIT_NODE_FIREFOX_TOKEN = "Mozilla FxA / ProxyPass Token"
+    override val EXIT_NODE_FIREFOX_TOKEN_DESC = "FxA oauth bearer token or Guardian ProxyPass token for Fastly egress"
+    override val EXIT_NODE_FIREFOX_COUNTRY = "Egress Country (e.g. us, de, gb, fr, nl, ca)"
+    override val EXIT_NODE_FIREFOX_PORT = "Local Proxy Port"
+    override val EXIT_NODE_FIREFOX_ACCOUNT = "Mozilla Account Email (Optional)"
+
     override val PROTON_IMPORT_BUTTON = "Auto-Import from Proton Account"
     override val PROTON_CONNECT_PRIMARY_FIRST_TITLE = "Connect Primary Tunnel First"
     override val PROTON_CONNECT_PRIMARY_FIRST_DESC = "Proton VPN services are blocked on restricted networks. Please connect your primary tunnel (WireGuard / MASQUE / GOOL) first so the Proton login page can open without censorship."

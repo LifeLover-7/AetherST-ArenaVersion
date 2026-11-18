@@ -74,7 +74,8 @@ enum class ExitNodeMode(val rawValue: String, val displayName: String) {
     DIRECT("direct", "Direct Primary Tunnel"),
     PSIPHON_POOL("psiphon_pool", "Psiphon Multi-Core"),
     CUSTOM_WG("custom_wg", "Custom WireGuard Exit"),
-    CUSTOM_SOCKS5("custom_socks5", "Custom SOCKS5")
+    CUSTOM_SOCKS5("custom_socks5", "Custom SOCKS5"),
+    FIREFOX_VPN("firefox_vpn", "Firefox VPN (Mozilla / Fastly)")
 }
 
 @Serializable
@@ -308,7 +309,11 @@ data class AetherConfig(
     val customSocks5Host: String = "",
     val customSocks5Port: Int = 1080,
     val customSocks5Username: String = "",
-    val customSocks5Password: String = ""
+    val customSocks5Password: String = "",
+    val firefoxVpnAccount: String = "",
+    val firefoxVpnToken: String = "",
+    val firefoxVpnCountry: String = "",
+    val firefoxVpnPort: Int = 10810
 ) {
     fun zeroTrustError(): String? {
         if (protocol != AetherProtocol.ZERO_TRUST) return null

@@ -86,6 +86,7 @@ fun DashboardScreen(
     var showTorSheet by remember { mutableStateOf(false) }
     var showCustomWgDialog by remember { mutableStateOf(false) }
     var showCustomSocks5Dialog by remember { mutableStateOf(false) }
+    var showFirefoxVpnDialog by remember { mutableStateOf(false) }
     var showRoutingModal by remember { mutableStateOf(false) }
     val strings = LocalAppStrings.current
     val uriHandler = LocalUriHandler.current
@@ -357,6 +358,10 @@ fun DashboardScreen(
                     showRoutingModal = false
                     showCustomSocks5Dialog = true
                 },
+                onOpenFirefoxVpnDialog = {
+                    showRoutingModal = false
+                    showFirefoxVpnDialog = true
+                },
                 onDismiss = { showRoutingModal = false },
                 scaleFactor = scaleFactor
             )
@@ -416,6 +421,25 @@ fun DashboardScreen(
                     )
                 },
                 onDismiss = { showCustomSocks5Dialog = false }
+            )
+        }
+        if (showFirefoxVpnDialog) {
+            FirefoxVpnDialog(
+                initialAccount = config.firefoxVpnAccount,
+                initialToken = config.firefoxVpnToken,
+                initialCountry = config.firefoxVpnCountry,
+                initialPort = config.firefoxVpnPort,
+                onSave = { account, token, country, port ->
+                    onUpdateConfig(
+                        config.copy(
+                            firefoxVpnAccount = account,
+                            firefoxVpnToken = token,
+                            firefoxVpnCountry = country,
+                            firefoxVpnPort = port
+                        )
+                    )
+                },
+                onDismiss = { showFirefoxVpnDialog = false }
             )
         }
     }
@@ -1188,6 +1212,7 @@ fun ExitNodeCard(
     onOpenPsiphonSheet: () -> Unit = {},
     onOpenWgDialog: () -> Unit,
     onOpenSocks5Dialog: () -> Unit,
+    onOpenFirefoxVpnDialog: () -> Unit = {},
     enabled: Boolean = true,
     scaleFactor: Float = 1f
 ) {
@@ -1233,12 +1258,13 @@ fun ExitNodeCard(
 
             Spacer(modifier = Modifier.height(10.dp))
 
-            // 4-item Segmented Selector
+            // 5-item Segmented Selector
             val options = listOf(
                 ExitNodeMode.DIRECT to (if (strings is StringsFa) "مستقیم" else "Direct"),
                 ExitNodeMode.PSIPHON_POOL to (if (strings is StringsFa) "سایفون" else "Psiphon"),
                 ExitNodeMode.CUSTOM_WG to (if (strings is StringsFa) "وایرگارد" else "WireGuard"),
-                ExitNodeMode.CUSTOM_SOCKS5 to (if (strings is StringsFa) "ساکس ۵" else "SOCKS5")
+                ExitNodeMode.CUSTOM_SOCKS5 to (if (strings is StringsFa) "ساکس ۵" else "SOCKS5"),
+                ExitNodeMode.FIREFOX_VPN to (if (strings is StringsFa) "فایرفاکس" else "Firefox")
             )
 
             Row(
@@ -1431,6 +1457,41 @@ fun ExitNodeCard(
                             Icons.Default.Edit,
                             contentDescription = null,
                             tint = IosActiveBlue,
+                            modifier = Modifier.size(16.dp)
+                        )
+                    }
+                }
+                ExitNodeMode.FIREFOX_VPN -> {
+                    val ffTarget = if (config.firefoxVpnToken.isNotBlank()) "${config.firefoxVpnCountry.uppercase()} :${config.firefoxVpnPort}" else null
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(10.dp))
+                            .background(Color(0xFF0D0F17))
+                            .border(BorderStroke(1.dp, Color(0xFF262C3D)), RoundedCornerShape(10.dp))
+                            .clickable { onOpenFirefoxVpnDialog() }
+                            .padding(horizontal = 10.dp, vertical = 8.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                text = strings.EXIT_NODE_FIREFOX_VPN,
+                                fontWeight = FontWeight.SemiBold,
+                                color = Color.White,
+                                fontSize = (11 * scaleFactor).sp
+                            )
+                            Text(
+                                text = ffTarget ?: strings.EXIT_NODE_CONFIGURE,
+                                color = if (ffTarget != null) Color(0xFFFF944D) else IosActiveBlue,
+                                fontSize = (10 * scaleFactor).sp,
+                                maxLines = 1
+                            )
+                        }
+                        Icon(
+                            Icons.Default.Edit,
+                            contentDescription = null,
+                            tint = Color(0xFFFF944D),
                             modifier = Modifier.size(16.dp)
                         )
                     }

@@ -220,6 +220,10 @@ class AetherConfigRepository private constructor(private val settings: Settings)
             customSocks5Port = settings.getInt("${prefix}custom_socks5_port", 1080),
             customSocks5Username = settings.getString("${prefix}custom_socks5_username", ""),
             customSocks5Password = settings.getString("${prefix}custom_socks5_password", ""),
+            firefoxVpnAccount = settings.getString("${prefix}firefox_vpn_account", ""),
+            firefoxVpnToken = settings.getString("${prefix}firefox_vpn_token", ""),
+            firefoxVpnCountry = settings.getString("${prefix}firefox_vpn_country", ""),
+            firefoxVpnPort = settings.getInt("${prefix}firefox_vpn_port", 10810),
         ).let { enforceWireGuardConstraints(it) }
     }
 
@@ -307,6 +311,11 @@ class AetherConfigRepository private constructor(private val settings: Settings)
         }
         if ((out.psiphonChainOuter == "wg" || out.psiphonChainOuter == "gool") && out.psiphonChainMode == PsiphonChainMode.FALLBACK) {
             out = out.copy(psiphonChainMode = PsiphonChainMode.AUTO)
+        }
+        val sPort = out.socksPort.toIntOrNull() ?: 2021
+        val hPort = out.httpPort.toIntOrNull() ?: 2020
+        if (sPort == hPort) {
+            out = out.copy(httpPort = if (sPort == 2021) "2020" else (sPort + 1).toString())
         }
         return out
     }
@@ -531,6 +540,10 @@ class AetherConfigRepository private constructor(private val settings: Settings)
         settings.putInt("${prefix}custom_socks5_port", cfg.customSocks5Port)
         settings.putString("${prefix}custom_socks5_username", cfg.customSocks5Username)
         settings.putString("${prefix}custom_socks5_password", cfg.customSocks5Password)
+        settings.putString("${prefix}firefox_vpn_account", cfg.firefoxVpnAccount)
+        settings.putString("${prefix}firefox_vpn_token", cfg.firefoxVpnToken)
+        settings.putString("${prefix}firefox_vpn_country", cfg.firefoxVpnCountry)
+        settings.putInt("${prefix}firefox_vpn_port", cfg.firefoxVpnPort)
     }
 
     fun resetToDefaults() {

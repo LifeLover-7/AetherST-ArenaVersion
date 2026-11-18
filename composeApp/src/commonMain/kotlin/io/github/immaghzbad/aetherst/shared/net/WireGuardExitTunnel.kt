@@ -348,12 +348,39 @@ class WireGuardExitTunnel(
             "level": "warn",
             "timestamp": true
           },
+          "dns": {
+            "servers": [
+              {
+                "tag": "dns-wireguard",
+                "address": "1.1.1.1",
+                "detour": "proton-exit"
+              },
+              {
+                "tag": "dns-upstream",
+                "address": "tcp://1.1.1.1",
+                "detour": "$innerDetour"
+              }
+            ],
+            "rules": [
+              {
+                "outbound": "any",
+                "server": "dns-wireguard"
+              }
+            ],
+            "strategy": "prefer_ipv4"
+          },
           "inbounds": [
             {
               "type": "socks",
               "tag": "socks-in",
               "listen": "127.0.0.1",
               "listen_port": $listenPort
+            },
+            {
+              "type": "http",
+              "tag": "http-in",
+              "listen": "127.0.0.1",
+              "listen_port": ${listenPort - 1}
             }
           ],
           "outbounds": [
@@ -378,7 +405,7 @@ class WireGuardExitTunnel(
           "route": {
             "rules": [
               {
-                "inbound": "socks-in",
+                "inbound": ["socks-in", "http-in"],
                 "outbound": "proton-exit"
               }
             ],
@@ -394,6 +421,51 @@ class WireGuardExitTunnel(
      * that the exit IP is NOT in Iran (IR).
      */
     private fun verifyDataPlane(socksPort: Int): String? {
+        // Probe 0 (Fastest, zero DNS dependency): Cloudflare trace via direct IP 1.1.1.1:80
+        try {
+            Socket().use { socket ->
+                socket.soTimeout = 4000
+                socket.connect(InetSocketAddress("127.0.0.1", socksPort), 2000)
+                val out = socket.getOutputStream()
+                val input = socket.getInputStream()
+                out.write(byteArrayOf(0x05, 0x01, 0x00))
+                out.flush()
+                val authResp = ByteArray(2)
+                readFully(input, authResp)
+                if (authResp[0] == 0x05.toByte() && authResp[1] == 0x00.toByte()) {
+                    val req = byteArrayOf(
+                        0x05, 0x01, 0x00, 0x01,
+                        1, 1, 1, 1,
+                        0x00, 0x50
+                    )
+                    out.write(req)
+                    out.flush()
+                    val connResp = ByteArray(4)
+                    readFully(input, connResp)
+                    if (connResp[1] == 0x00.toByte()) {
+                        when (connResp[3]) {
+                            0x01.toByte() -> readFully(input, ByteArray(4 + 2))
+                            0x03.toByte() -> {
+                                val len = input.read()
+                                if (len > 0) readFully(input, ByteArray(len + 2))
+                            }
+                            0x04.toByte() -> readFully(input, ByteArray(16 + 2))
+                        }
+                        val httpReq = "GET /cdn-cgi/trace HTTP/1.1\r\nHost: 1.1.1.1\r\nUser-Agent: AetherST/2.1\r\nConnection: close\r\n\r\n"
+                        out.write(httpReq.toByteArray(Charsets.US_ASCII))
+                        out.flush()
+                        val text = input.bufferedReader(Charsets.US_ASCII).readText()
+                        val ip = Regex("""(?m)^ip=(.+)$""").find(text)?.groupValues?.get(1)?.trim()
+                        val loc = Regex("""(?m)^loc=(.+)$""").find(text)?.groupValues?.get(1)?.trim()?.uppercase()
+                        if (!ip.isNullOrBlank() && loc != "IR") {
+                            LogRepository.i("[WgExit] Direct Cloudflare trace verified: $ip ($loc)", "WgExit")
+                            return ip
+                        }
+                    }
+                }
+            }
+        } catch (_: Exception) {}
+
         // Probe 1: ip-api.com with countryCode & IP
         val targetHost = "ip-api.com"
         val targetPort = 80

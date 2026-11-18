@@ -273,15 +273,15 @@ class DesktopSystemUtils : SystemUtils {
         return try {
             val props = java.util.Properties()
             val stream = this::class.java.classLoader.getResourceAsStream("app.properties")
-            if (stream != null) { stream.use { props.load(it) }; props.getProperty("app.version", "2.1.1") } else "2.1.1"
-        } catch (_: Exception) { "2.1.1" }
+            if (stream != null) { stream.use { props.load(it) }; props.getProperty("app.version", "2.1.2") } else "2.1.2"
+        } catch (_: Exception) { "2.1.2" }
     }
     override fun getAppVersionCode(): Int {
         return try {
             val props = java.util.Properties()
             val stream = this::class.java.classLoader.getResourceAsStream("app.properties")
-            if (stream != null) { stream.use { props.load(it) }; props.getProperty("app.version_code", props.getProperty("app.versionCode", "22")).toIntOrNull() ?: 22 } else 22
-        } catch (_: Exception) { 22 }
+            if (stream != null) { stream.use { props.load(it) }; props.getProperty("app.version_code", props.getProperty("app.versionCode", "23")).toIntOrNull() ?: 23 } else 23
+        } catch (_: Exception) { 23 }
     }
     override fun exitApp() {
         try {
@@ -338,10 +338,22 @@ class DesktopSystemUtils : SystemUtils {
     }.getOrNull()
 
     override fun setSystemProxy(host: String, port: Int) {
+        setSystemProxy(host, httpPort = port, socksPort = port)
+    }
+
+    override fun setSystemProxy(host: String, httpPort: Int, socksPort: Int) {
         try {
             val isWindows = System.getProperty("os.name").lowercase().contains("win")
             if (!isWindows) return
-            val proxyStr = "http=$host:$port;https=$host:$port"
+            val proxyStr = when {
+                httpPort > 0 && socksPort > 0 && httpPort != socksPort ->
+                    "http=$host:$httpPort;https=$host:$httpPort;socks=$host:$socksPort"
+                httpPort > 0 ->
+                    "http=$host:$httpPort;https=$host:$httpPort"
+                socksPort > 0 ->
+                    "socks=$host:$socksPort"
+                else -> return
+            }
             val regPath = "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Internet Settings"
             val bypass = "<local>;localhost;127.*;10.*;172.16.*;172.17.*;172.18.*;172.19.*;172.20.*;172.21.*;172.22.*;172.23.*;172.24.*;172.25.*;172.26.*;172.27.*;172.28.*;172.29.*;172.30.*;172.31.*;192.168.*"
             ProcessBuilder("reg", "add", regPath, "/v", "ProxyEnable", "/t", "REG_DWORD", "/d", "1", "/f").start().waitFor(5, java.util.concurrent.TimeUnit.SECONDS)

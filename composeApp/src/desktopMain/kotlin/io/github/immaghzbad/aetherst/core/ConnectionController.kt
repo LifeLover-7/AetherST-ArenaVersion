@@ -78,6 +78,7 @@ actual object ConnectionController {
         @Volatile private var isUserInitiatedStop = false
         @Volatile private var wgExitTunnel: io.github.immaghzbad.aetherst.shared.net.WireGuardExitTunnel? = null
         @Volatile private var customSocksRelay: io.github.immaghzbad.aetherst.shared.net.CustomSocks5Relay? = null
+        @Volatile private var firefoxVpnTunnel: io.github.immaghzbad.aetherst.shared.net.FirefoxVpnExitTunnel? = null
         private var statusJob: Job? = null
         private var watchdogJob: Job? = null
         private var reconnectJob: Job? = null
@@ -317,6 +318,31 @@ actual object ConnectionController {
                     LogRepository.w("[Controller] Custom SOCKS5 relay start failed, falling back to primary tunnel on port $coreSocksPort", "SOCKS5")
                     effectiveTargetPort = coreSocksPort
                 }
+            } else if (effectiveConfig.exitNodeMode == ExitNodeMode.FIREFOX_VPN) {
+                val binaryPath = runCatching {
+                    io.github.immaghzbad.aetherst.shared.core.getBinaryManager(context).prepareBinary("sing-box")
+                }.getOrNull()
+                val workDir = System.getProperty("user.home") + "/.aether"
+                java.io.File(workDir).mkdirs()
+                val tunnel = io.github.immaghzbad.aetherst.shared.net.FirefoxVpnExitTunnel(
+                    token = effectiveConfig.firefoxVpnToken,
+                    country = effectiveConfig.firefoxVpnCountry,
+                    binaryPath = binaryPath,
+                    workingDir = workDir,
+                    primarySocksHost = "127.0.0.1",
+                    primarySocksPort = coreSocksPort,
+                    localListenPort = effectiveConfig.firefoxVpnPort
+                )
+                val started = runCatching { tunnel.start() }.getOrDefault(false)
+                if (started) {
+                    firefoxVpnTunnel = tunnel
+                    effectiveTargetPort = effectiveConfig.firefoxVpnPort
+                    ActiveProxyProvider.firefoxVpnPort = effectiveConfig.firefoxVpnPort
+                    LogRepository.i("[Controller] Firefox VPN Exit ready on port ${effectiveConfig.firefoxVpnPort} (Exit IP: ${tunnel.verifiedExitIp ?: "Active"})", "FirefoxVpn")
+                } else {
+                    LogRepository.w("[Controller] Firefox VPN start failed, falling back to primary tunnel on port $coreSocksPort", "FirefoxVpn")
+                    effectiveTargetPort = coreSocksPort
+                }
             }
 
             currentCoroutineContext().ensureActive()
@@ -325,7 +351,24 @@ actual object ConnectionController {
             if (effectiveConfig.connectionMode == ConnectionMode.TUNNEL) {
                 startTunnelMode(effectiveConfig, effectiveTargetPort)
             } else if (effectiveConfig.connectionMode == ConnectionMode.SYSTEM_PROXY) {
-                getSystemUtils(context).setSystemProxy("127.0.0.1", effectiveTargetPort)
+                when (effectiveConfig.exitNodeMode) {
+                    ExitNodeMode.DIRECT -> {
+                        getSystemUtils(context).setSystemProxy("127.0.0.1", httpPort = actualHttpPort, socksPort = coreSocksPort)
+                    }
+                    ExitNodeMode.PSIPHON_POOL -> {
+                        val psiphonHttpPort = effectiveTargetPort + 1
+                        getSystemUtils(context).setSystemProxy("127.0.0.1", httpPort = psiphonHttpPort, socksPort = effectiveTargetPort)
+                    }
+                    ExitNodeMode.CUSTOM_WG -> {
+                        getSystemUtils(context).setSystemProxy("127.0.0.1", httpPort = 10804, socksPort = 10805)
+                    }
+                    ExitNodeMode.FIREFOX_VPN -> {
+                        getSystemUtils(context).setSystemProxy("127.0.0.1", httpPort = effectiveTargetPort - 1, socksPort = effectiveTargetPort)
+                    }
+                    else -> {
+                        getSystemUtils(context).setSystemProxy("127.0.0.1", httpPort = 0, socksPort = effectiveTargetPort)
+                    }
+                }
             }
 
             _status.value = ConnectionStatus.RUNNING
@@ -495,13 +538,15 @@ actual object ConnectionController {
             } else {
                 emptyList()
             }
+            val udpMode = if (isPsiphonActive || config.exitNodeMode == ExitNodeMode.PSIPHON_POOL) "tcp" else "udp"
             TunHelper.start(
                 socksTargetPort = targetPort,
                 configuredMtu = effectiveMtu,
                 bypassExes = config.excludedPackages,
                 blockedExes = config.blockedPackages,
                 tunnelAllApps = config.tunnelAllApps,
-                directIps = directIps
+                directIps = directIps,
+                udpMode = udpMode
             )
             LogRepository.i("[Controller] TUN helper started on port $targetPort, mtu=$effectiveMtu, bypass=${config.excludedPackages.size}, blocked=${config.blockedPackages.size}")
         }
@@ -540,11 +585,14 @@ actual object ConnectionController {
             wgExitTunnel = null
             try { customSocksRelay?.stop() } catch (_: Throwable) {}
             customSocksRelay = null
+            try { firefoxVpnTunnel?.stop() } catch (_: Throwable) {}
+            firefoxVpnTunnel = null
             try { runner.stop() } catch (_: Throwable) {}
             try { CloakController.stop() } catch (_: Throwable) {}
 
             ActiveProxyProvider.psiphonProxyUrl = null
             ActiveProxyProvider.customWgPort = null
+            ActiveProxyProvider.firefoxVpnPort = null
             isPsiphonActive = false
 
             try { getSystemUtils(context).clearSystemProxy() } catch (_: Throwable) {}

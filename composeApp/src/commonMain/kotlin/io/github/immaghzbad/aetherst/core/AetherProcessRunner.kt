@@ -223,8 +223,6 @@ class AetherProcessRunner(private val context: PlatformContext) {
                     if (wgPeer.isNotEmpty()) {
                         command.add("--peer")
                         command.add(wgPeer)
-                        command.add("--wg-peer")
-                        command.add(wgPeer)
                     }
                 }
                 else -> {
@@ -436,7 +434,7 @@ class AetherProcessRunner(private val context: PlatformContext) {
                     lower.contains("wiw tunnel validated") ||
                     lower.contains("warp-in-warp tunnel validated") ||
                     lower.contains("gool exit:") ||
-                    (lower.contains("socks") && lower.contains("listening") && lower.contains(lastBindAddress)) ||
+                    (lower.contains("socks") && lower.contains("listening")) ||
                     (lower.contains("exit location") && lower.contains("accepted"))
                 ) {
                     updateState(ConnectionStatus.RUNNING, attemptId)

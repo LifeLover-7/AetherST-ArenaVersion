@@ -127,6 +127,7 @@ import io.github.immaghzbad.aetherst.shared.model.TunnelEngine
 import io.github.immaghzbad.aetherst.shared.ui.components.AppDivider
 import io.github.immaghzbad.aetherst.shared.ui.components.CustomSocks5Dialog
 import io.github.immaghzbad.aetherst.shared.ui.components.CustomWireGuardDialog
+import io.github.immaghzbad.aetherst.shared.ui.components.FirefoxVpnDialog
 import io.github.immaghzbad.aetherst.shared.ui.components.IosActionRow
 import io.github.immaghzbad.aetherst.shared.ui.components.IosConfirmationDialog
 import io.github.immaghzbad.aetherst.shared.ui.components.IosGroupCard
@@ -449,6 +450,7 @@ private fun ConnectionPage(
     val strings = LocalAppStrings.current
     var showCustomWgDialog by remember { mutableStateOf(false) }
     var showCustomSocks5Dialog by remember { mutableStateOf(false) }
+    var showFirefoxVpnDialog by remember { mutableStateOf(false) }
 
     IosGroupCard {
         Column {
@@ -515,13 +517,15 @@ private fun ConnectionPage(
                 strings.EXIT_NODE_DIRECT,
                 strings.EXIT_NODE_PSIPHON_POOL,
                 strings.EXIT_NODE_CUSTOM_WG,
-                strings.EXIT_NODE_CUSTOM_SOCKS5
+                strings.EXIT_NODE_CUSTOM_SOCKS5,
+                strings.EXIT_NODE_FIREFOX_VPN
             )
             val exitIdx = when (config.exitNodeMode) {
                 ExitNodeMode.DIRECT -> 0
                 ExitNodeMode.PSIPHON_POOL -> 1
                 ExitNodeMode.CUSTOM_WG -> 2
                 ExitNodeMode.CUSTOM_SOCKS5 -> 3
+                ExitNodeMode.FIREFOX_VPN -> 4
             }
             IosPickerRow(
                 icon = Icons.AutoMirrored.Filled.AltRoute,
@@ -534,6 +538,7 @@ private fun ConnectionPage(
                         1 -> ExitNodeMode.PSIPHON_POOL
                         2 -> ExitNodeMode.CUSTOM_WG
                         3 -> ExitNodeMode.CUSTOM_SOCKS5
+                        4 -> ExitNodeMode.FIREFOX_VPN
                         else -> ExitNodeMode.DIRECT
                     }
                     onUpdateConfig(config.copy(exitNodeMode = mode))
@@ -558,6 +563,16 @@ private fun ConnectionPage(
                     title = strings.EXIT_NODE_CUSTOM_SOCKS5,
                     subtitle = socksSummary,
                     onClick = { showCustomSocks5Dialog = true }
+                )
+            } else if (config.exitNodeMode == ExitNodeMode.FIREFOX_VPN) {
+                AppDivider()
+                val ffSummary = if (config.firefoxVpnToken.isNotBlank()) "${config.firefoxVpnCountry.uppercase()} :${config.firefoxVpnPort}" else strings.EXIT_NODE_CONFIGURE
+                IosActionRow(
+                    icon = Icons.Default.Tune,
+                    iconBg = Color(0xFFFF944D),
+                    title = strings.EXIT_NODE_FIREFOX_VPN,
+                    subtitle = ffSummary,
+                    onClick = { showFirefoxVpnDialog = true }
                 )
             }
 
@@ -596,6 +611,26 @@ private fun ConnectionPage(
                 )
             },
             onDismiss = { showCustomSocks5Dialog = false }
+        )
+    }
+
+    if (showFirefoxVpnDialog) {
+        FirefoxVpnDialog(
+            initialAccount = config.firefoxVpnAccount,
+            initialToken = config.firefoxVpnToken,
+            initialCountry = config.firefoxVpnCountry,
+            initialPort = config.firefoxVpnPort,
+            onSave = { account, token, country, port ->
+                onUpdateConfig(
+                    config.copy(
+                        firefoxVpnAccount = account,
+                        firefoxVpnToken = token,
+                        firefoxVpnCountry = country,
+                        firefoxVpnPort = port
+                    )
+                )
+            },
+            onDismiss = { showFirefoxVpnDialog = false }
         )
     }
 }

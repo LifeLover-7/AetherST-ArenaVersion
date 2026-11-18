@@ -64,7 +64,9 @@ class DesktopBinaryManager : BinaryManager {
 
         if (needExtract) {
             try {
-                val stream = getResourceStream(binName) ?: getResourceStream("bin/$binName") ?: getResourceStream("bin/aether.exe")
+                val stream = getResourceStream(binName)
+                    ?: getResourceStream("bin/$binName")
+                    ?: (if (isAether) getResourceStream("bin/aether.exe") else null)
                 stream?.use { input ->
                     targetFile.outputStream().use { output -> input.copyTo(output) }
                     if (!System.getProperty("os.name").lowercase().contains("win")) targetFile.setExecutable(true)

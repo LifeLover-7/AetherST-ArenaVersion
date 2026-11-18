@@ -50,6 +50,9 @@ interface SystemUtils {
     fun shareFile(fileName: String, content: String)
     fun readInternalAsset(fileName: String): String?
     fun setSystemProxy(host: String, port: Int)
+    fun setSystemProxy(host: String, httpPort: Int, socksPort: Int) {
+        setSystemProxy(host, if (httpPort > 0) httpPort else socksPort)
+    }
     fun clearSystemProxy()
     fun setSystemDns(dnsList: String)
     fun clearSystemDns()

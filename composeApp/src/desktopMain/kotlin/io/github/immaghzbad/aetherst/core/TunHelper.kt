@@ -30,7 +30,8 @@ object TunHelper {
         bypassExes: Set<String> = emptySet(),
         blockedExes: Set<String> = emptySet(),
         tunnelAllApps: Boolean = true,
-        directIps: List<String> = emptyList()
+        directIps: List<String> = emptyList(),
+        udpMode: String = "udp"
     ) {
         if (isRunning.getAndSet(true)) return
         targetSocksPort = socksTargetPort
@@ -46,7 +47,7 @@ object TunHelper {
             val dataDir = getSystemUtils(context).getFilesDir()
             val dataDirFile = File(dataDir)
 
-            File(dataDir, HEV_YAML).writeText(buildHevConfig(socksTargetPort, safeMtu))
+            File(dataDir, HEV_YAML).writeText(buildHevConfig(socksTargetPort, safeMtu, udpMode))
             writeParams(socksTargetPort, dataDirFile, safeMtu, bypassExes, blockedExes, tunnelAllApps, directIps)
             File(dataDir, STOP_FLAG).delete()
             writeHelperScript(dataDirFile)
@@ -111,12 +112,13 @@ object TunHelper {
 
     fun isActive(): Boolean = isRunning.get()
 
-    private fun buildHevConfig(targetPort: Int, mtu: Int): String {
+    private fun buildHevConfig(targetPort: Int, mtu: Int, udpMode: String = "udp"): String {
         val logFile = runCatching {
             val context = PlatformContext()
             val dataDir = getSystemUtils(context).getFilesDir()
             File(dataDir, "hev.log").absolutePath.replace('\\', '/')
         }.getOrDefault("hev.log")
+        val safeUdp = if (udpMode.isBlank() || udpMode == "off") "" else "  udp: $udpMode"
         return """
             |tunnel:
             |  name: $TUN_NAME
@@ -125,7 +127,7 @@ object TunHelper {
             |socks5:
             |  address: 127.0.0.1
             |  port: $targetPort
-            |  udp: udp
+            |$safeUdp
             |mapdns:
             |  address: $DNS_FAKE
             |  port: 53
@@ -281,8 +283,26 @@ object TunHelper {
             |${'$'}gw = (Get-NetRoute -DestinationPrefix '0.0.0.0/0' -ErrorAction SilentlyContinue | Where-Object { ${'$'}_.InterfaceAlias -ne ${'$'}params.tunName -and ${'$'}_.NextHop -ne '0.0.0.0' } | Sort-Object RouteMetric | Select-Object -First 1).NextHop
             |if (-not ${'$'}gw) { ${'$'}gw = (Get-NetIPConfiguration | Where-Object { ${'$'}_.NetAdapter.Status -eq 'Up' -and ${'$'}_.IPv4DefaultGateway -ne ${'$'}null } | Select-Object -First 1).IPv4DefaultGateway.NextHop }
             |L "physical gateway ${'$'}gw"
+            |${'$'}cfRanges = @(
+            |    @{ ip = '162.159.192.0'; mask = '255.255.255.0' },
+            |    @{ ip = '162.159.193.0'; mask = '255.255.255.0' },
+            |    @{ ip = '162.159.195.0'; mask = '255.255.255.0' },
+            |    @{ ip = '188.114.96.0';  mask = '255.255.255.0' },
+            |    @{ ip = '188.114.97.0';  mask = '255.255.255.0' },
+            |    @{ ip = '188.114.98.0';  mask = '255.255.255.0' },
+            |    @{ ip = '188.114.99.0';  mask = '255.255.255.0' },
+            |    @{ ip = '172.64.0.0';    mask = '255.248.0.0' }
+            |)
+            |foreach (${'$'}r in ${'$'}cfRanges) {
+            |    if (${'$'}gw) { route add ${'$'}r.ip mask ${'$'}r.mask ${'$'}gw metric 1 2>&1 | Out-Null }
+            |}
             |foreach (${'$'}ip in ${'$'}params.endpointIps) {
             |    if (${'$'}ip -and ${'$'}gw) { route add ${'$'}ip mask 255.255.255.255 ${'$'}gw metric 1 2>&1 | Out-Null }
+            |}
+            |foreach (${'$'}ip in ${'$'}params.directIps) {
+            |    if (${'$'}ip -and ${'$'}gw -and (${'$'}ip -notmatch '/')) {
+            |        route add ${'$'}ip mask 255.255.255.255 ${'$'}gw metric 1 2>&1 | Out-Null
+            |    }
             |}
             |${'$'}state = @{
             |    ifIndex = "${'$'}ifIndex"
@@ -330,6 +350,19 @@ object TunHelper {
             |        }
             |    } catch {}
             |    Remove-Item ${'$'}stateFile -ErrorAction SilentlyContinue
+            |}
+            |${'$'}cfRanges = @(
+            |    @{ ip = '162.159.192.0'; mask = '255.255.255.0' },
+            |    @{ ip = '162.159.193.0'; mask = '255.255.255.0' },
+            |    @{ ip = '162.159.195.0'; mask = '255.255.255.0' },
+            |    @{ ip = '188.114.96.0';  mask = '255.255.255.0' },
+            |    @{ ip = '188.114.97.0';  mask = '255.255.255.0' },
+            |    @{ ip = '188.114.98.0';  mask = '255.255.255.0' },
+            |    @{ ip = '188.114.99.0';  mask = '255.255.255.0' },
+            |    @{ ip = '172.64.0.0';    mask = '255.248.0.0' }
+            |)
+            |foreach (${'$'}r in ${'$'}cfRanges) {
+            |    route delete ${'$'}r.ip mask ${'$'}r.mask 2>&1 | Out-Null
             |}
             |route delete 0.0.0.0 mask 128.0.0.0 $TUN_IPV4 2>&1 | Out-Null
             |route delete 128.0.0.0 mask 128.0.0.0 $TUN_IPV4 2>&1 | Out-Null

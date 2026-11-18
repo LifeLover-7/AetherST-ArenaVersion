@@ -664,6 +664,7 @@ class AetherViewModel(platformContext: PlatformContext) : ViewModel() {
         val effectivePort = when (cfg.exitNodeMode) {
             ExitNodeMode.CUSTOM_WG -> ActiveProxyProvider.customWgPort ?: 10805
             ExitNodeMode.CUSTOM_SOCKS5 -> 10806
+            ExitNodeMode.FIREFOX_VPN -> ActiveProxyProvider.firefoxVpnPort ?: cfg.firefoxVpnPort
             ExitNodeMode.PSIPHON_POOL -> {
                 val psiphon = ActiveProxyProvider.psiphonProxyUrl
                 if (!psiphon.isNullOrEmpty()) {
@@ -717,6 +718,7 @@ class AetherViewModel(platformContext: PlatformContext) : ViewModel() {
                     val exitPort = when (cfg.exitNodeMode) {
                         ExitNodeMode.CUSTOM_WG -> ActiveProxyProvider.customWgPort ?: 10805
                         ExitNodeMode.CUSTOM_SOCKS5 -> 10806
+                        ExitNodeMode.FIREFOX_VPN -> ActiveProxyProvider.firefoxVpnPort ?: cfg.firefoxVpnPort
                         ExitNodeMode.PSIPHON_POOL -> {
                             val psiphon = ActiveProxyProvider.psiphonProxyUrl
                             if (!psiphon.isNullOrEmpty()) {
