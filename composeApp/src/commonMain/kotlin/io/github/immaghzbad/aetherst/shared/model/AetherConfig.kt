@@ -20,6 +20,14 @@ enum class AetherProtocol(val rawValue: String, val displayName: String, val des
 }
 
 @Serializable
+enum class MasqueHttpVersion(val rawValue: String, val displayName: String, val description: String) {
+    AUTO("auto", "Auto (Smart)", "Automatic H2/H3 negotiation"),
+    H3("h3", "H3 (HTTP/3 QUIC)", "Fastest UDP/QUIC transport"),
+    H2("h2", "H2 (HTTP/2 TCP)", "Anti-DPI TCP/TLS transport (Recommended for Iran)"),
+    H1("h1", "H1 (HTTP/1.1 Legacy)", "Plain HTTP/1.1 CONNECT over TLS")
+}
+
+@Serializable
 enum class AetherNoise(val rawValue: String, val displayName: String) {
     FIREWALL("firewall", "Firewall (Strict Censorship)"),
     GFW("gfw", "GFW (Heavy DPI Obfuscation)"),
@@ -196,6 +204,7 @@ data class AetherConfig(
     val echEnabled: Boolean = false,
     val httpProxyEnabled: Boolean = false,
     val perfProfile: AetherPerfProfile = AetherPerfProfile.AUTO,
+    val httpVersion: MasqueHttpVersion = MasqueHttpVersion.H2,
     val h2Mode: Boolean = true,
     val h2Fragment: Boolean = true,
     val fragmentSize: String = "30-60",
@@ -214,6 +223,7 @@ data class AetherConfig(
     val wiwInner: String = "",
     val wiwScan: Boolean = true,
     val goolClassic: Boolean = false,
+    val goolNeighborEgress: Boolean = true,
     val masqueMtu: Int = 0,
     val netstackTcpRx: Int = 0,
     val netstackTcpTx: Int = 0,
@@ -315,6 +325,10 @@ data class AetherConfig(
     val firefoxVpnCountry: String = "",
     val firefoxVpnPort: Int = 10810
 ) {
+    fun effectiveHttpVersion(): MasqueHttpVersion {
+        return if (httpVersion != MasqueHttpVersion.AUTO) httpVersion else if (h2Mode) MasqueHttpVersion.H2 else MasqueHttpVersion.H3
+    }
+
     fun zeroTrustError(): String? {
         if (protocol != AetherProtocol.ZERO_TRUST) return null
         if (teamName.isBlank()) return "Organization Team Name is required for Zero Trust"
