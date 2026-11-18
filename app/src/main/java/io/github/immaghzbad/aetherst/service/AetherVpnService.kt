@@ -884,10 +884,17 @@ class AetherVpnService : VpnService() {
                             LogRepository.i("[VpnService] WireGuard exit node active on port $localPort (Verified IP: ${tunnel.verifiedExitIp})")
                             return "127.0.0.1" to localPort
                         } else {
-                            LogRepository.w("[VpnService] Custom WG start or verification failed, falling back to direct primary socks")
-                            return "127.0.0.1" to (config.socksPort.toIntOrNull() ?: 2021)
+                            val err = tunnel.lastErrorMessage ?: "Proton WireGuard handshake failed"
+                            LogRepository.e("[VpnService] $err")
+                            throw IllegalStateException(err)
                         }
                     }
+                    ActiveProxyProvider.customWgPort = localPort
+                    return "127.0.0.1" to localPort
+                } else {
+                    throw IllegalStateException("Custom WireGuard config is incomplete or missing")
+                }
+            }
                     ActiveProxyProvider.customWgPort = localPort
                     return "127.0.0.1" to localPort
                 } else {
