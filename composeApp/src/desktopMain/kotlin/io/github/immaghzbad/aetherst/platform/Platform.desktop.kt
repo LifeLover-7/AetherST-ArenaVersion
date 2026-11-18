@@ -273,15 +273,15 @@ class DesktopSystemUtils : SystemUtils {
         return try {
             val props = java.util.Properties()
             val stream = this::class.java.classLoader.getResourceAsStream("app.properties")
-            if (stream != null) { stream.use { props.load(it) }; props.getProperty("app.version", "2.1.2") } else "2.1.2"
-        } catch (_: Exception) { "2.1.2" }
+            if (stream != null) { stream.use { props.load(it) }; props.getProperty("app.version", "2.1.3") } else "2.1.3"
+        } catch (_: Exception) { "2.1.3" }
     }
     override fun getAppVersionCode(): Int {
         return try {
             val props = java.util.Properties()
             val stream = this::class.java.classLoader.getResourceAsStream("app.properties")
-            if (stream != null) { stream.use { props.load(it) }; props.getProperty("app.version_code", props.getProperty("app.versionCode", "23")).toIntOrNull() ?: 23 } else 23
-        } catch (_: Exception) { 23 }
+            if (stream != null) { stream.use { props.load(it) }; props.getProperty("app.version_code", props.getProperty("app.versionCode", "24")).toIntOrNull() ?: 24 } else 24
+        } catch (_: Exception) { 24 }
     }
     override fun exitApp() {
         try {

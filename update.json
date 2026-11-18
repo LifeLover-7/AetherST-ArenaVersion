@@ -1,7 +1,7 @@
 {
-  "version": "2.1.2",
-  "version_code": 23,
+  "version": "2.1.3",
+  "version_code": 24,
   "is_beta": false,
-  "changelog": "All protocols restored (WireGuard Direct, Psiphon Multi-Core, WireGuard + WireGuard Proton), dual-protocol system proxy, UPX binary compression, and Firefox VPN exit node chaining.",
-  "release_url": "https://github.com/LifeLover-7/AetherST-Private/releases/tag/v2.1.2"
+  "changelog": "WireGuard Direct, Psiphon Multi-Core, WireGuard + Proton exit node, and Firefox VPN chaining integration.",
+  "release_url": "https://github.com/LifeLover-7/AetherST-Private/releases/tag/v2.1.3"
 }
