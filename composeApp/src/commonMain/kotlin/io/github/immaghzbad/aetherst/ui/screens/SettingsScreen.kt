@@ -123,6 +123,7 @@ import io.github.immaghzbad.aetherst.shared.model.ChainProvider
 import io.github.immaghzbad.aetherst.shared.model.ConnectionMode
 import io.github.immaghzbad.aetherst.shared.model.ExitNodeMode
 import io.github.immaghzbad.aetherst.shared.model.IpInfoProvider
+import io.github.immaghzbad.aetherst.shared.model.MasqueHttpVersion
 import io.github.immaghzbad.aetherst.shared.model.TunnelEngine
 import io.github.immaghzbad.aetherst.shared.ui.components.AppDivider
 import io.github.immaghzbad.aetherst.shared.ui.components.CustomSocks5Dialog
@@ -713,7 +714,46 @@ private fun ProtocolPage(config: AetherConfig, onUpdateConfig: (AetherConfig) ->
     Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
         IosGroupCard { Column {
             IosPickerRow(icon = Icons.Default.VpnLock, iconBg = IosActiveBlue, title = strings.TRANSPORT_PROTOCOL, value = config.protocol.displayName, options = AetherProtocol.entries.map { it.displayName }, onOptionSelected = { onUpdateConfig(config.copy(protocol = AetherProtocol.entries[it])) })
-            if (config.protocol == AetherProtocol.MASQUE || config.protocol == AetherProtocol.MIM) { AppDivider(); IosSwitchRow(icon = Icons.Default.Http, iconBg = IosActiveBlue, title = strings.HTTP2_FALLBACK, subtitle = strings.HTTP2_FALLBACK_SUB, checked = config.h2Mode, onCheckedChange = { onUpdateConfig(config.copy(h2Mode = it)) }, testTag = "switch_h2_mode"); AppDivider(); IosSwitchRow(icon = Icons.Default.VerticalSplit, iconBg = AppPalette.accentVariant, title = strings.PACKET_FRAGMENTATION, subtitle = strings.PACKET_FRAGMENTATION_SUB, checked = config.h2Fragment, onCheckedChange = { onUpdateConfig(config.copy(h2Fragment = it)) }, testTag = "switch_fragment"); if (config.h2Fragment) { IosInputFieldRow(icon = Icons.Default.Straighten, iconBg = IosSecondaryLabel, label = strings.FRAGMENT_SIZE, value = config.fragmentSize, onValueChange = { onUpdateConfig(config.copy(fragmentSize = it)) }, placeholder = "16-32", testTag = "fragment_size_input"); AppDivider(); IosInputFieldRow(icon = Icons.Default.Timer, iconBg = IosSecondaryLabel, label = strings.FRAGMENT_DELAY, value = config.fragmentDelay, onValueChange = { onUpdateConfig(config.copy(fragmentDelay = it)) }, placeholder = "2-10", testTag = "fragment_delay_input"); AppDivider() }; IosSwitchRow(icon = Icons.Default.EnhancedEncryption, iconBg = IosActiveGreen, title = strings.ECH, subtitle = strings.ECH_SUB, checked = config.echEnabled, onCheckedChange = { onUpdateConfig(config.copy(echEnabled = it)) }, testTag = "switch_ech_enabled"); AppDivider(); IosInputFieldRow(icon = Icons.Default.Straighten, iconBg = IosSecondaryLabel, label = strings.MASQUE_INNER_MTU, value = if (config.masqueMtu > 0) config.masqueMtu.toString() else "", onValueChange = { onUpdateConfig(config.copy(masqueMtu = it.toIntOrNull()?.coerceIn(0, 9000) ?: 0)) }, placeholder = "Auto", keyboardType = KeyboardType.Number, testTag = "masque_mtu_input"); AppDivider(); IosSwitchRow(icon = Icons.Default.SwapHoriz, iconBg = Color(0xFF30B0C7), title = strings.MIM_ENABLE, subtitle = strings.MIM_ENABLE_SUB, checked = config.mimEnabled, onCheckedChange = { onUpdateConfig(config.copy(mimEnabled = it)) }, testTag = "switch_mim_enabled"); if (config.mimEnabled) { AppDivider(); IosInputFieldRow(icon = Icons.AutoMirrored.Filled.Send, iconBg = AppPalette.accentVariant, label = strings.MIM_OUTER, value = config.mimOuter, onValueChange = { onUpdateConfig(config.copy(mimOuter = it.trim())) }, placeholder = "e.g. 162.159.192.1:443", testTag = "mim_outer_input"); AppDivider(); IosInputFieldRow(icon = Icons.AutoMirrored.Filled.Send, iconBg = AppPalette.accentVariant, label = strings.MIM_INNER, value = config.mimInner, onValueChange = { onUpdateConfig(config.copy(mimInner = it.trim())) }, placeholder = "e.g. 188.114.96.1:443", testTag = "mim_inner_input"); AppDivider(); IosSwitchRow(icon = Icons.Default.Refresh, iconBg = AppPalette.statusScanning, title = strings.MIM_SCAN, subtitle = null, checked = config.mimScan, onCheckedChange = { onUpdateConfig(config.copy(mimScan = it)) }, testTag = "switch_mim_scan"); AppDivider() }; IosSwitchRow(icon = Icons.Default.Speed, iconBg = AppPalette.statusScanning, title = strings.QUIC_V2_PROBE, subtitle = strings.QUIC_V2_PROBE_SUB, checked = config.quicV2Probe, onCheckedChange = { onUpdateConfig(config.copy(quicV2Probe = it)) }, testTag = "switch_quic_v2"); AppDivider(); IosInputFieldRow(icon = Icons.Default.Shield, iconBg = IosSecondaryLabel, label = strings.FIREWALL_MARK, value = config.firewallMark, onValueChange = { onUpdateConfig(config.copy(firewallMark = it.trim())) }, placeholder = "0xff", testTag = "firewall_mark_input"); AppDivider() }
+            if (config.protocol == AetherProtocol.MASQUE || config.protocol == AetherProtocol.MIM) {
+                AppDivider()
+                IosPickerRow(
+                    icon = Icons.Default.Http,
+                    iconBg = IosActiveBlue,
+                    title = "HTTP Transport Version (H1 / H2 / H3)",
+                    value = config.httpVersion.displayName,
+                    options = MasqueHttpVersion.entries.map { it.displayName },
+                    onOptionSelected = { idx ->
+                        val selected = MasqueHttpVersion.entries[idx]
+                        onUpdateConfig(config.copy(httpVersion = selected, h2Mode = selected == MasqueHttpVersion.H2 || selected == MasqueHttpVersion.AUTO))
+                    }
+                )
+                AppDivider()
+                IosSwitchRow(icon = Icons.Default.VerticalSplit, iconBg = AppPalette.accentVariant, title = strings.PACKET_FRAGMENTATION, subtitle = strings.PACKET_FRAGMENTATION_SUB, checked = config.h2Fragment, onCheckedChange = { onUpdateConfig(config.copy(h2Fragment = it)) }, testTag = "switch_fragment")
+                if (config.h2Fragment) {
+                    IosInputFieldRow(icon = Icons.Default.Straighten, iconBg = IosSecondaryLabel, label = strings.FRAGMENT_SIZE, value = config.fragmentSize, onValueChange = { onUpdateConfig(config.copy(fragmentSize = it)) }, placeholder = "16-32", testTag = "fragment_size_input")
+                    AppDivider()
+                    IosInputFieldRow(icon = Icons.Default.Timer, iconBg = IosSecondaryLabel, label = strings.FRAGMENT_DELAY, value = config.fragmentDelay, onValueChange = { onUpdateConfig(config.copy(fragmentDelay = it)) }, placeholder = "2-10", testTag = "fragment_delay_input")
+                    AppDivider()
+                }
+                IosSwitchRow(icon = Icons.Default.EnhancedEncryption, iconBg = IosActiveGreen, title = strings.ECH, subtitle = strings.ECH_SUB, checked = config.echEnabled, onCheckedChange = { onUpdateConfig(config.copy(echEnabled = it)) }, testTag = "switch_ech_enabled")
+                AppDivider()
+                IosInputFieldRow(icon = Icons.Default.Straighten, iconBg = IosSecondaryLabel, label = strings.MASQUE_INNER_MTU, value = if (config.masqueMtu > 0) config.masqueMtu.toString() else "", onValueChange = { onUpdateConfig(config.copy(masqueMtu = it.toIntOrNull()?.coerceIn(0, 9000) ?: 0)) }, placeholder = "Auto", keyboardType = KeyboardType.Number, testTag = "masque_mtu_input")
+                AppDivider()
+                IosSwitchRow(icon = Icons.Default.SwapHoriz, iconBg = Color(0xFF30B0C7), title = strings.MIM_ENABLE, subtitle = strings.MIM_ENABLE_SUB, checked = config.mimEnabled, onCheckedChange = { onUpdateConfig(config.copy(mimEnabled = it)) }, testTag = "switch_mim_enabled")
+                if (config.mimEnabled) {
+                    AppDivider()
+                    IosInputFieldRow(icon = Icons.AutoMirrored.Filled.Send, iconBg = AppPalette.accentVariant, label = strings.MIM_OUTER, value = config.mimOuter, onValueChange = { onUpdateConfig(config.copy(mimOuter = it.trim())) }, placeholder = "e.g. 162.159.192.1:443", testTag = "mim_outer_input")
+                    AppDivider()
+                    IosInputFieldRow(icon = Icons.AutoMirrored.Filled.Send, iconBg = AppPalette.accentVariant, label = strings.MIM_INNER, value = config.mimInner, onValueChange = { onUpdateConfig(config.copy(mimInner = it.trim())) }, placeholder = "e.g. 188.114.96.1:443", testTag = "mim_inner_input")
+                    AppDivider()
+                    IosSwitchRow(icon = Icons.Default.Refresh, iconBg = AppPalette.statusScanning, title = strings.MIM_SCAN, subtitle = null, checked = config.mimScan, onCheckedChange = { onUpdateConfig(config.copy(mimScan = it)) }, testTag = "switch_mim_scan")
+                    AppDivider()
+                }
+                IosSwitchRow(icon = Icons.Default.Speed, iconBg = AppPalette.statusScanning, title = strings.QUIC_V2_PROBE, subtitle = strings.QUIC_V2_PROBE_SUB, checked = config.quicV2Probe, onCheckedChange = { onUpdateConfig(config.copy(quicV2Probe = it)) }, testTag = "switch_quic_v2")
+                AppDivider()
+                IosInputFieldRow(icon = Icons.Default.Shield, iconBg = IosSecondaryLabel, label = strings.FIREWALL_MARK, value = config.firewallMark, onValueChange = { onUpdateConfig(config.copy(firewallMark = it.trim())) }, placeholder = "0xff", testTag = "firewall_mark_input")
+                AppDivider()
+            }
             IosSwitchRow(icon = Icons.Default.DataUsage, iconBg = AppPalette.statusScanning, title = strings.DISABLE_DATA_VERIFICATION, subtitle = strings.DISABLE_DATA_VERIFICATION_SUB, checked = config.noDataCheck, onCheckedChange = { onUpdateConfig(config.copy(noDataCheck = it)) }, testTag = "switch_no_data_check"); AppDivider()
             val availNoise = if (config.protocol == AetherProtocol.MASQUE || config.protocol == AetherProtocol.MIM) listOf(AetherNoise.FIREWALL, AetherNoise.GFW, AetherNoise.OFF) else listOf(AetherNoise.BALANCED, AetherNoise.AGGRESSIVE, AetherNoise.LIGHT, AetherNoise.OFF)
             IosPickerRow(icon = Icons.Default.Tune, iconBg = AppPalette.accentVariantAlt, title = strings.BYPASS_OBFUSCATION, value = config.noise.displayName.substringBefore(" ("), options = availNoise.map { it.displayName }, onOptionSelected = { onUpdateConfig(config.copy(noise = availNoise[it])) }); AppDivider()
@@ -823,8 +863,9 @@ private fun NetworkPage(config: AetherConfig, onUpdateConfig: (AetherConfig) -> 
         if (config.protocol == AetherProtocol.WG || config.protocol == AetherProtocol.GOOL) {
             IosInputFieldRow(icon = Icons.AutoMirrored.Filled.AltRoute, iconBg = AppPalette.accentVariant, label = strings.WG_PEER, value = config.wgPeer, onValueChange = { onUpdateConfig(config.copy(wgPeer = it)) }, placeholder = "e.g. 162.159.192.1:2408", testTag = "wg_peer_input"); AppDivider()
         }
-        if (config.protocol == AetherProtocol.GOOL) {
+if (config.protocol == AetherProtocol.GOOL) {
             IosSwitchRow(icon = Icons.AutoMirrored.Filled.AltRoute, iconBg = AppPalette.accent, title = strings.GOOL_CLASSIC_MODE, subtitle = strings.GOOL_CLASSIC_MODE_SUB, checked = config.goolClassic, onCheckedChange = { onUpdateConfig(config.copy(goolClassic = it)) }, testTag = "switch_gool_classic"); AppDivider()
+            IosSwitchRow(icon = Icons.Default.Public, iconBg = IosActiveGreen, title = "ترجیح کشورهای همسایه (Gool Neighbor Egress)", subtitle = "قفل کردن لایه دوم روی دیتاسنترهای نزدیک ایران (ترکیه، آذربایجان، امارات، ارمنستان)", checked = config.goolNeighborEgress, onCheckedChange = { onUpdateConfig(config.copy(goolNeighborEgress = it)) }, testTag = "switch_gool_neighbor"); AppDivider()
             IosInputFieldRow(icon = Icons.AutoMirrored.Filled.AltRoute, iconBg = AppPalette.accentVariant, label = strings.WIW_OUTER, value = config.wiwOuter, onValueChange = { onUpdateConfig(config.copy(wiwOuter = it)) }, placeholder = "e.g. 162.159.192.1:2408", testTag = "wiw_outer_input"); AppDivider()
             IosInputFieldRow(icon = Icons.AutoMirrored.Filled.AltRoute, iconBg = AppPalette.accentVariant, label = strings.WIW_INNER, value = config.wiwInner, onValueChange = { onUpdateConfig(config.copy(wiwInner = it)) }, placeholder = "e.g. 188.114.96.1:2408", testTag = "wiw_inner_input"); AppDivider()
             IosSwitchRow(icon = Icons.Default.Radar, iconBg = AppPalette.statusScanning, title = strings.WIW_SCAN, subtitle = strings.WIW_SCAN_SUB, checked = config.wiwScan, onCheckedChange = { onUpdateConfig(config.copy(wiwScan = it)) }, testTag = "switch_wiw_scan"); AppDivider()
