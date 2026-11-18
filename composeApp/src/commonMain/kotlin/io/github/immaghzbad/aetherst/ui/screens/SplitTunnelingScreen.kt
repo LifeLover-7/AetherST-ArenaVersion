@@ -62,16 +62,18 @@ private val IosInactiveTrack get() = AppPalette.inactiveTrack
 private val IranianAppKeywords = listOf(
     "snapp", "tapsi", "tap30", "divar", "torob", "digikala", "digipay", "bale", "eitaa",
     "soroush", "mmdt", "rubika", "gap", "igap", "shaparak", "asanpardakht", "sekeh",
-    "bahamta", "blubank", "sibche", "myket", "farsitel", "cafebazaar", "bazaar",
-    "irancell", "myirancell", "mci", "hamrah", "rightel", "shatel", "asiatech",
-    "aparat", "filimo", "namava", "telewebion", "fidibo", "taaghche", "ketabrah",
+    "bahamta", "blubank", "sibche", "sibapp", "myket", "farsitel", "cafebazaar", "bazaar",
+    "irancell", "myirancell", "mci", "hamrah", "rightel", "shatel", "asiatech", "mobinnet",
+    "aparat", "filimo", "namava", "telewebion", "irib", "fidibo", "taaghche", "ketabrah",
     "basalam", "okala", "alopeyk", "takhfifan", "alibaba", "mrbilit", "flytoday",
     "jabama", "otaghak", "achareh", "karnameh", "azki", "bimito", "nobitex", "wallex",
     "ramzinex", "bitpin", "tabdeal", "ompfinex", "mellat", "melli", "saderat", "sepah",
     "tejarat", "parsian", "pasargad", "saman", "keshavarzi", "maskan", "refah",
-    "gardeshgari", "ayandeh", "neshan", "balad", "virgool", "zoomit", "digiato",
-    "varzesh3", "hamrahbank", "mobillet", "780", "724", "pishkhan", "sakha", "taamin",
-    "tamin", "rahvar", "shad", "zarinpal", "payping", "tobank", "wepod", "pod"
+    "gardeshgari", "ayandeh", "sina", "postbank", "daybank", "shahr", "melal", "noor",
+    "neshan", "balad", "virgool", "zoomit", "digiato", "varzesh3", "hamrahbank",
+    "mobillet", "780", "724", "pishkhan", "sakha", "taamin", "tamin", "rahvar",
+    "shad", "zarinpal", "payping", "tobank", "wepod", "pod", "baam", "bam", "kilid",
+    "sheypoor", "banimode", "khanoumi", "emalls", "lenz", "gapfilm", "filmnet"
 )
 private val PersianCharRegex = Regex("[\\u0600-\\u06FF]")
 
@@ -164,6 +166,38 @@ fun SplitTunnelingScreen(
                 Text(strings.SPLIT_TITLE, fontWeight = FontWeight.Bold, color = Color.White, fontSize = (18 * scaleFactor).sp, lineHeight = (20 * scaleFactor).sp)
                 Text(strings.SPLIT_STATS_TUNNEL_BYPASS_BLOCKED.format(tunneledCount, bypassCount, blockedCount), color = IosSecondaryLabel, fontSize = (11 * scaleFactor).sp)
             }
+
+            // دکمه شناسایی خودکار برنامه‌های ایرانی (فعال هم در اندروید و هم در دسکتاپ)
+            Row(
+                modifier = Modifier
+                    .clip(RoundedCornerShape(8.dp))
+                    .background(IosActiveGreen.copy(alpha = 0.2f))
+                    .clickable {
+                        val iranianPkgs = effectiveApps
+                            .filter { !it.isSystemApp && isIranianApp(it) }
+                            .map { it.packageName }
+                        if (iranianPkgs.isNotEmpty()) {
+                            onBulkUpdateMode(iranianPkgs, 0) // 0 = Bypass (Direct)
+                            autoDetectedCount = iranianPkgs.size
+                            modeFilter = 2 // نمایش تب Bypass
+                        } else {
+                            autoDetectedCount = 0
+                        }
+                    }
+                    .padding(horizontal = (10 * scaleFactor).dp, vertical = (6 * scaleFactor).dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Icon(Icons.Default.AutoFixHigh, contentDescription = null, tint = IosActiveGreen, modifier = Modifier.size((15 * scaleFactor).dp))
+                Spacer(modifier = Modifier.width((4 * scaleFactor).dp))
+                Text(
+                    text = if (autoDetectedCount != null) "اپ‌های ایرانی (${autoDetectedCount})" else "اپ‌های ایرانی",
+                    color = IosActiveGreen,
+                    fontWeight = FontWeight.Bold,
+                    fontSize = (11 * scaleFactor).sp
+                )
+            }
+            Spacer(modifier = Modifier.width((4 * scaleFactor).dp))
+
             if (isWindowsDesktop) {
                 if (removedPackages.isNotEmpty()) {
                     IconButton(
@@ -194,38 +228,8 @@ fun SplitTunnelingScreen(
                     Text("افزودن برنامه", color = Color.White, fontWeight = FontWeight.Bold, fontSize = (11 * scaleFactor).sp)
                 }
                 Spacer(modifier = Modifier.width((4 * scaleFactor).dp))
-            } else {
-                // دکمه شناسایی خودکار برنامه‌های ایرانی نصب‌شده روی موبایل و افزودن به لیست Bypass
-                Row(
-                    modifier = Modifier
-                        .clip(RoundedCornerShape(8.dp))
-                        .background(IosActiveGreen.copy(alpha = 0.2f))
-                        .clickable {
-                            val iranianPkgs = effectiveApps
-                                .filter { !it.isSystemApp && isIranianApp(it) }
-                                .map { it.packageName }
-                            if (iranianPkgs.isNotEmpty()) {
-                                onBulkUpdateMode(iranianPkgs, 0) // 0 = Bypass (Direct)
-                                autoDetectedCount = iranianPkgs.size
-                                modeFilter = 2 // نمایش تب Bypass
-                            } else {
-                                autoDetectedCount = 0
-                            }
-                        }
-                        .padding(horizontal = (10 * scaleFactor).dp, vertical = (6 * scaleFactor).dp),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Icon(Icons.Default.AutoFixHigh, contentDescription = null, tint = IosActiveGreen, modifier = Modifier.size((15 * scaleFactor).dp))
-                    Spacer(modifier = Modifier.width((4 * scaleFactor).dp))
-                    Text(
-                        text = if (autoDetectedCount != null) "اپ‌های ایرانی (${autoDetectedCount})" else "اپ‌های ایرانی",
-                        color = IosActiveGreen,
-                        fontWeight = FontWeight.Bold,
-                        fontSize = (11 * scaleFactor).sp
-                    )
-                }
-                Spacer(modifier = Modifier.width((4 * scaleFactor).dp))
             }
+
             IconButton(onClick = { showHelpDialog = true }, modifier = Modifier.size((36 * scaleFactor).dp)) {
                 Icon(Icons.Default.Info, null, tint = IosActiveBlue, modifier = Modifier.size((20 * scaleFactor).dp))
             }
@@ -288,8 +292,6 @@ fun SplitTunnelingScreen(
                     onUpdateMode = { m -> onUpdateMode(app.packageName, m) },
                     onRemoveApp = if (isWindowsDesktop) {
                         {
-                            // وقتی tunnelAllApps=true، حذف = برگشت به تونل (mode 1)
-                            // وقتی tunnelAllApps=false، حذف = برگشت به bypass (mode 0 - از لیست tunnel خارج می‌شود)
                             onUpdateMode(app.packageName, if (tunnelAllApps) 1 else 0)
                             SplitTunnelAppManager.onRemoveApp?.invoke(app.packageName)
                         }
