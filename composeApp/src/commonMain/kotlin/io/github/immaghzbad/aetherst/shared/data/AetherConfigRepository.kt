@@ -109,6 +109,7 @@ class AetherConfigRepository private constructor(private val settings: Settings)
             echEnabled = settings.getBoolean("${prefix}ech_enabled", false),
             httpProxyEnabled = settings.getBoolean("${prefix}http_proxy_enabled", false),
             perfProfile = runCatching { AetherPerfProfile.valueOf(perfProfileStr) }.getOrDefault(AetherPerfProfile.AUTO),
+            httpVersion = runCatching { MasqueHttpVersion.valueOf(settings.getString("${prefix}http_version", MasqueHttpVersion.H2.name)) }.getOrDefault(MasqueHttpVersion.H2),
             h2Mode = settings.getBoolean("${prefix}h2_mode", true),
             h2Fragment = settings.getBoolean("${prefix}h2_fragment", true),
             fragmentSize = settings.getString("${prefix}fragment_size", "30-60"),
@@ -127,6 +128,7 @@ class AetherConfigRepository private constructor(private val settings: Settings)
             wiwInner = settings.getString("${prefix}wiw_inner", ""),
             wiwScan = settings.getBoolean("${prefix}wiw_scan", true),
             goolClassic = settings.getBoolean("${prefix}gool_classic", false),
+            goolNeighborEgress = settings.getBoolean("${prefix}gool_neighbor_egress", true),
             masqueMtu = settings.getInt("${prefix}masque_mtu", 0),
             netstackTcpRx = settings.getInt("${prefix}netstack_tcp_rx", 0),
             netstackTcpTx = settings.getInt("${prefix}netstack_tcp_tx", 0),
@@ -431,6 +433,7 @@ class AetherConfigRepository private constructor(private val settings: Settings)
         settings.putBoolean("${prefix}ech_enabled", cfg.echEnabled)
         settings.putBoolean("${prefix}http_proxy_enabled", cfg.httpProxyEnabled)
         settings.putString("${prefix}perf_profile", cfg.perfProfile.name)
+        settings.putString("${prefix}http_version", cfg.httpVersion.name)
         settings.putBoolean("${prefix}h2_mode", cfg.h2Mode)
         settings.putBoolean("${prefix}h2_fragment", cfg.h2Fragment)
         settings.putString("${prefix}fragment_size", cfg.fragmentSize)
@@ -449,6 +452,7 @@ class AetherConfigRepository private constructor(private val settings: Settings)
         settings.putString("${prefix}wiw_inner", cfg.wiwInner)
         settings.putBoolean("${prefix}wiw_scan", cfg.wiwScan)
         settings.putBoolean("${prefix}gool_classic", cfg.goolClassic)
+        settings.putBoolean("${prefix}gool_neighbor_egress", cfg.goolNeighborEgress)
         settings.putInt("${prefix}masque_mtu", cfg.masqueMtu.coerceIn(0, 9000))
         settings.putInt("${prefix}netstack_tcp_rx", cfg.netstackTcpRx.coerceIn(0, 67108864))
         settings.putInt("${prefix}netstack_tcp_tx", cfg.netstackTcpTx.coerceIn(0, 67108864))
@@ -553,7 +557,6 @@ class AetherConfigRepository private constructor(private val settings: Settings)
     }
 
     fun getFullConfigJson(): String {
-        // ذخیره ۱۰۰٪ واقعی تمام تنظیمات شامل برنامه‌ها و روت‌های سایت‌ها
         return Json.encodeToString(_config.value)
     }
 
@@ -603,6 +606,7 @@ class AetherConfigRepository private constructor(private val settings: Settings)
                 scanMode = AetherScanMode.TURBO,
                 echEnabled = false,
                 httpProxyEnabled = false,
+                httpVersion = MasqueHttpVersion.H2,
                 h2Mode = true,
                 h2Fragment = true,
                 fragmentSize = "30-60",
@@ -621,12 +625,14 @@ class AetherConfigRepository private constructor(private val settings: Settings)
                 scanMode = AetherScanMode.BALANCED,
                 echEnabled = false,
                 httpProxyEnabled = false,
+                httpVersion = MasqueHttpVersion.H2,
                 h2Mode = true,
                 h2Fragment = true,
                 fragmentSize = "30-60",
                 fragmentDelay = "5-15",
                 masqueSni = "consumer-masque.cloudflareclient.com",
                 goolClassic = false,
+                goolNeighborEgress = true,
                 noDataCheck = false,
                 tlsGroups = "",
                 mtu = 1240,
@@ -641,12 +647,14 @@ class AetherConfigRepository private constructor(private val settings: Settings)
                 scanMode = AetherScanMode.TURBO,
                 echEnabled = false,
                 httpProxyEnabled = false,
+                httpVersion = MasqueHttpVersion.H2,
                 h2Mode = true,
                 h2Fragment = true,
                 fragmentSize = "30-60",
                 fragmentDelay = "5-15",
                 masqueSni = "consumer-masque.cloudflareclient.com",
                 goolClassic = false,
+                goolNeighborEgress = true,
                 noDataCheck = false,
                 tlsGroups = "",
                 mtu = 1240,
@@ -664,6 +672,7 @@ class AetherConfigRepository private constructor(private val settings: Settings)
                 scanMode = AetherScanMode.TURBO,
                 echEnabled = false,
                 httpProxyEnabled = false,
+                httpVersion = MasqueHttpVersion.H2,
                 h2Mode = true,
                 h2Fragment = true,
                 fragmentSize = "30-60",
@@ -681,6 +690,7 @@ class AetherConfigRepository private constructor(private val settings: Settings)
                 scanMode = AetherScanMode.THOROUGH,
                 echEnabled = false,
                 httpProxyEnabled = false,
+                httpVersion = MasqueHttpVersion.H2,
                 h2Mode = true,
                 h2Fragment = true,
                 fragmentSize = "30-60",
@@ -698,6 +708,7 @@ class AetherConfigRepository private constructor(private val settings: Settings)
                 scanMode = AetherScanMode.STEALTH,
                 echEnabled = false,
                 httpProxyEnabled = false,
+                httpVersion = MasqueHttpVersion.H2,
                 h2Mode = true,
                 h2Fragment = true,
                 fragmentSize = "30-60",
@@ -718,6 +729,7 @@ class AetherConfigRepository private constructor(private val settings: Settings)
                 scanMode = AetherScanMode.IRONCLAD,
                 echEnabled = false,
                 httpProxyEnabled = false,
+                httpVersion = MasqueHttpVersion.H2,
                 h2Mode = true,
                 h2Fragment = true,
                 fragmentSize = "30-60",
@@ -747,6 +759,7 @@ class AetherConfigRepository private constructor(private val settings: Settings)
         settings.putString("${p}ip_mode", cfg.ipMode.name)
         settings.putBoolean("${p}ech_enabled", cfg.echEnabled)
         settings.putBoolean("${p}http_proxy_enabled", cfg.httpProxyEnabled)
+        settings.putString("${p}http_version", cfg.httpVersion.name)
         settings.putBoolean("${p}h2_mode", cfg.h2Mode)
         settings.putBoolean("${p}h2_fragment", cfg.h2Fragment)
         settings.putString("${p}fragment_size", cfg.fragmentSize)
@@ -759,6 +772,7 @@ class AetherConfigRepository private constructor(private val settings: Settings)
         settings.putString("${p}wiw_inner", cfg.wiwInner)
         settings.putBoolean("${p}wiw_scan", cfg.wiwScan)
         settings.putBoolean("${p}gool_classic", cfg.goolClassic)
+        settings.putBoolean("${p}gool_neighbor_egress", cfg.goolNeighborEgress)
         settings.putString("${p}masque_sni", cfg.masqueSni)
         settings.putInt("${p}masque_mtu", cfg.masqueMtu.coerceIn(0, 9000))
         settings.putInt("${p}netstack_tcp_rx", cfg.netstackTcpRx.coerceIn(0, 67108864))
@@ -796,6 +810,7 @@ class AetherConfigRepository private constructor(private val settings: Settings)
                 ipMode = AetherIpMode.AUTO,
                 echEnabled = false,
                 httpProxyEnabled = false,
+                httpVersion = MasqueHttpVersion.H2,
                 h2Mode = true,
                 h2Fragment = true,
                 fragmentSize = "30-60",
@@ -828,6 +843,7 @@ class AetherConfigRepository private constructor(private val settings: Settings)
                 ipMode = AetherIpMode.AUTO,
                 echEnabled = false,
                 httpProxyEnabled = true,
+                httpVersion = MasqueHttpVersion.H2,
                 h2Mode = true,
                 h2Fragment = true,
                 fragmentSize = "30-60",
@@ -860,6 +876,7 @@ class AetherConfigRepository private constructor(private val settings: Settings)
                 ipMode = AetherIpMode.AUTO,
                 echEnabled = false,
                 httpProxyEnabled = false,
+                httpVersion = MasqueHttpVersion.H2,
                 h2Mode = true,
                 h2Fragment = true,
                 fragmentSize = "30-60",
@@ -873,6 +890,7 @@ class AetherConfigRepository private constructor(private val settings: Settings)
                 wiwInner = "",
                 wiwScan = true,
                 goolClassic = false,
+                goolNeighborEgress = true,
                 masqueMtu = 0,
                 netstackTcpRx = 0,
                 netstackTcpTx = 0,
@@ -892,11 +910,16 @@ class AetherConfigRepository private constructor(private val settings: Settings)
                 ipMode = AetherIpMode.IPV4,
                 echEnabled = false,
                 httpProxyEnabled = false,
+                httpVersion = MasqueHttpVersion.H2,
                 h2Mode = true,
                 h2Fragment = true,
                 fragmentSize = "30-60",
                 fragmentDelay = "5-15",
                 masqueSni = "consumer-masque.cloudflareclient.com",
+                mimEnabled = true,
+                mimOuter = "",
+                mimInner = "",
+                mimScan = true,
                 noDataCheck = false,
                 quickReconnect = true,
                 peer = "",
@@ -905,10 +928,6 @@ class AetherConfigRepository private constructor(private val settings: Settings)
                 wiwInner = "",
                 wiwScan = true,
                 goolClassic = false,
-                mimEnabled = true,
-                mimOuter = "",
-                mimInner = "",
-                mimScan = true,
                 masqueMtu = 0,
                 netstackTcpRx = 0,
                 netstackTcpTx = 0,
@@ -928,6 +947,7 @@ class AetherConfigRepository private constructor(private val settings: Settings)
                 ipMode = AetherIpMode.AUTO,
                 echEnabled = false,
                 httpProxyEnabled = false,
+                httpVersion = MasqueHttpVersion.H2,
                 h2Mode = true,
                 h2Fragment = false,
                 fragmentSize = "16-32",
@@ -966,6 +986,7 @@ class AetherConfigRepository private constructor(private val settings: Settings)
             ipMode = runCatching { AetherIpMode.valueOf(settings.getString("${p}ip_mode", "")) }.getOrDefault(base.ipMode),
             echEnabled = settings.getBoolean("${p}ech_enabled", false),
             httpProxyEnabled = settings.getBoolean("${p}http_proxy_enabled", base.httpProxyEnabled),
+            httpVersion = runCatching { MasqueHttpVersion.valueOf(settings.getString("${p}http_version", MasqueHttpVersion.H2.name)) }.getOrDefault(MasqueHttpVersion.H2),
             h2Mode = settings.getBoolean("${p}h2_mode", true),
             h2Fragment = settings.getBoolean("${p}h2_fragment", false),
             fragmentSize = settings.getString("${p}fragment_size", "16-32"),
@@ -979,6 +1000,7 @@ class AetherConfigRepository private constructor(private val settings: Settings)
             wiwInner = settings.getString("${p}wiw_inner", ""),
             wiwScan = settings.getBoolean("${p}wiw_scan", true),
             goolClassic = settings.getBoolean("${p}gool_classic", false),
+            goolNeighborEgress = settings.getBoolean("${p}gool_neighbor_egress", true),
             masqueMtu = settings.getInt("${p}masque_mtu", 0),
             netstackTcpRx = settings.getInt("${p}netstack_tcp_rx", 0),
             netstackTcpTx = settings.getInt("${p}netstack_tcp_tx", 0),
