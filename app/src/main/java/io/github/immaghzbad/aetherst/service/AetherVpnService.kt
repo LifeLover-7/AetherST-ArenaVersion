@@ -542,7 +542,6 @@ class AetherVpnService : VpnService() {
             try { builder.addDisallowedApplication(packageName) } catch (_: Exception) {}
             try { builder.addDisallowedApplication(applicationContext.packageName) } catch (_: Exception) {}
 
-            // اصلاح اصلی: در حالت تونل کل دستگاه، برنامه‌های Bypass در excludedPackages قرار دارند!
             val bypassPackages = config.excludedPackages
 
             var bypassedCount = 0
@@ -895,13 +894,6 @@ class AetherVpnService : VpnService() {
                     throw IllegalStateException("Custom WireGuard config is incomplete or missing")
                 }
             }
-                    ActiveProxyProvider.customWgPort = localPort
-                    return "127.0.0.1" to localPort
-                } else {
-                    LogRepository.w("[VpnService] Custom WG config invalid, falling back to direct primary socks")
-                    return "127.0.0.1" to (config.socksPort.toIntOrNull() ?: 2021)
-                }
-            }
             ExitNodeMode.CUSTOM_SOCKS5 -> {
                 val localPort = 10806
                 if (config.customSocks5Host.isNotBlank()) {
@@ -921,14 +913,12 @@ class AetherVpnService : VpnService() {
                             customSocksRelay = relay
                             return "127.0.0.1" to localPort
                         } else {
-                            LogRepository.w("[VpnService] Custom SOCKS5 start failed, falling back to direct primary socks")
-                            return "127.0.0.1" to (config.socksPort.toIntOrNull() ?: 2021)
+                            throw IllegalStateException("Custom SOCKS5 relay failed to connect")
                         }
                     }
                     return "127.0.0.1" to localPort
                 } else {
-                    LogRepository.w("[VpnService] Custom SOCKS5 host blank, falling back to direct primary socks")
-                    return "127.0.0.1" to (config.socksPort.toIntOrNull() ?: 2021)
+                    throw IllegalStateException("Custom SOCKS5 host is blank")
                 }
             }
             ExitNodeMode.FIREFOX_VPN -> {
@@ -952,8 +942,9 @@ class AetherVpnService : VpnService() {
                         LogRepository.i("[VpnService] Firefox VPN exit node active on port $localPort (Verified IP: ${tunnel.verifiedExitIp})")
                         return "127.0.0.1" to localPort
                     } else {
-                        LogRepository.w("[VpnService] Firefox VPN start failed, falling back to direct primary socks")
-                        return "127.0.0.1" to (config.socksPort.toIntOrNull() ?: 2021)
+                        val err = tunnel.lastErrorMessage ?: "Firefox VPN authentication or data-plane failed"
+                        LogRepository.e("[VpnService] $err")
+                        throw IllegalStateException(err)
                     }
                 }
                 ActiveProxyProvider.firefoxVpnPort = localPort
