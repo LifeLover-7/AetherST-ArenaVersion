@@ -7,6 +7,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Login
 import androidx.compose.material.icons.filled.VpnKey
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -21,7 +22,9 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import io.github.immaghzbad.aetherst.shared.i18n.LocalAppStrings
+import io.github.immaghzbad.aetherst.shared.net.FirefoxVpnExitTunnel
 import io.github.immaghzbad.aetherst.shared.ui.theme.AppPalette
+import kotlinx.coroutines.launch
 
 @Composable
 fun FirefoxVpnDialog(
@@ -33,11 +36,17 @@ fun FirefoxVpnDialog(
     onDismiss: () -> Unit
 ) {
     val strings = LocalAppStrings.current
+    val scope = rememberCoroutineScope()
 
     var account by remember { mutableStateOf(initialAccount) }
+    var password by remember { mutableStateOf("") }
     var token by remember { mutableStateOf(initialToken) }
     var country by remember { mutableStateOf(if (initialCountry.isNotBlank()) initialCountry else "us") }
     var port by remember { mutableStateOf(if (initialPort > 0) initialPort.toString() else "10810") }
+
+    var isSigningIn by remember { mutableStateOf(false) }
+    var statusMessage by remember { mutableStateOf<String?>(null) }
+    var isErrorStatus by remember { mutableStateOf(false) }
 
     Dialog(
         onDismissRequest = onDismiss,
@@ -87,41 +96,127 @@ fun FirefoxVpnDialog(
                     }
                 }
 
-                Spacer(modifier = Modifier.height(18.dp))
+                Spacer(modifier = Modifier.height(16.dp))
 
-                // FxA / ProxyPass Token
+                // Section 1: Direct Firefox Account Sign-In (Auto-fetch ProxyPass Token)
+                Text(
+                    text = "1. Sign in with Firefox Account (Auto-Fetch 50GB ProxyPass)",
+                    color = Color(0xFFFF944D),
+                    fontWeight = FontWeight.SemiBold,
+                    fontSize = 12.sp
+                )
+                Spacer(modifier = Modifier.height(8.dp))
+
+                IosInputField(
+                    label = strings.EXIT_NODE_FIREFOX_ACCOUNT,
+                    value = account,
+                    onValueChange = { account = it },
+                    placeholder = "firefox-user@example.com",
+                    testTag = "input_firefox_account",
+                    modifier = Modifier.fillMaxWidth()
+                )
+
+                Spacer(modifier = Modifier.height(8.dp))
+
+                IosInputField(
+                    label = "Firefox Account Password",
+                    value = password,
+                    onValueChange = { password = it },
+                    placeholder = "Enter password to fetch ProxyPass token",
+                    testTag = "input_firefox_password",
+                    modifier = Modifier.fillMaxWidth()
+                )
+
+                Spacer(modifier = Modifier.height(10.dp))
+
+                Button(
+                    onClick = {
+                        if (isSigningIn) return@Button
+                        isSigningIn = true
+                        statusMessage = "Signing in to Firefox Accounts & fetching ProxyPass..."
+                        isErrorStatus = false
+                        scope.launch {
+                            val result = FirefoxVpnExitTunnel.signInWithFirefoxAccount(
+                                email = account,
+                                password = password
+                            )
+                            isSigningIn = false
+                            result.onSuccess { fetchedToken ->
+                                token = fetchedToken
+                                password = ""
+                                isErrorStatus = false
+                                statusMessage = "✅ ProxyPass token fetched successfully! Tap Save to apply."
+                            }.onFailure { err ->
+                                isErrorStatus = true
+                                statusMessage = err.message ?: "Sign-in failed."
+                            }
+                        }
+                    },
+                    enabled = !isSigningIn && account.isNotBlank() && password.isNotBlank(),
+                    modifier = Modifier.fillMaxWidth().height(42.dp),
+                    shape = RoundedCornerShape(10.dp),
+                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF2563EB))
+                ) {
+                    if (isSigningIn) {
+                        CircularProgressIndicator(
+                            modifier = Modifier.size(16.dp),
+                            color = Color.White,
+                            strokeWidth = 2.dp
+                        )
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text("Authenticating...", fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                    } else {
+                        Icon(Icons.Default.Login, null, modifier = Modifier.size(16.dp))
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text("Sign In & Fetch ProxyPass Token", fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                    }
+                }
+
+                if (statusMessage != null) {
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Text(
+                        text = statusMessage!!,
+                        color = if (isErrorStatus) Color(0xFFF87171) else Color(0xFF4ADE80),
+                        fontSize = 11.sp,
+                        lineHeight = 15.sp
+                    )
+                }
+
+                Spacer(modifier = Modifier.height(16.dp))
+                Divider(color = Color(0xFF1E293B), thickness = 1.dp)
+                Spacer(modifier = Modifier.height(14.dp))
+
+                // Section 2: Token & Exit Settings
+                Text(
+                    text = "2. ProxyPass Token & Exit Location",
+                    color = Color(0xFF94A3B8),
+                    fontWeight = FontWeight.SemiBold,
+                    fontSize = 12.sp
+                )
+                Spacer(modifier = Modifier.height(8.dp))
+
                 IosInputField(
                     label = strings.EXIT_NODE_FIREFOX_TOKEN,
                     value = token,
                     onValueChange = { token = it },
-                    placeholder = "Bearer token or ProxyPass key",
+                    placeholder = "Guardian-Proxy-Pass token (auto-filled or paste manually)",
                     testTag = "input_firefox_token",
                     modifier = Modifier.fillMaxWidth()
                 )
 
-                Spacer(modifier = Modifier.height(6.dp))
-                Text(
-                    text = strings.EXIT_NODE_FIREFOX_TOKEN_DESC,
-                    color = Color(0xFF94A3B8),
-                    fontSize = 10.sp,
-                    modifier = Modifier.padding(horizontal = 4.dp)
-                )
+                Spacer(modifier = Modifier.height(10.dp))
 
-                Spacer(modifier = Modifier.height(12.dp))
-
-                // Country Code
                 IosInputField(
                     label = strings.EXIT_NODE_FIREFOX_COUNTRY,
                     value = country,
                     onValueChange = { country = it },
-                    placeholder = "us, de, gb, fr, nl, ca",
+                    placeholder = "us, de, gb, fr, nl, ca, jp",
                     testTag = "input_firefox_country",
                     modifier = Modifier.fillMaxWidth()
                 )
 
-                Spacer(modifier = Modifier.height(12.dp))
+                Spacer(modifier = Modifier.height(10.dp))
 
-                // Local SOCKS Port
                 IosInputField(
                     label = strings.EXIT_NODE_FIREFOX_PORT,
                     value = port,
@@ -129,18 +224,6 @@ fun FirefoxVpnDialog(
                     placeholder = "10810",
                     keyboardType = KeyboardType.Number,
                     testTag = "input_firefox_port",
-                    modifier = Modifier.fillMaxWidth()
-                )
-
-                Spacer(modifier = Modifier.height(12.dp))
-
-                // Account Email (Optional)
-                IosInputField(
-                    label = strings.EXIT_NODE_FIREFOX_ACCOUNT,
-                    value = account,
-                    onValueChange = { account = it },
-                    placeholder = "user@example.com (Optional)",
-                    testTag = "input_firefox_account",
                     modifier = Modifier.fillMaxWidth()
                 )
 
@@ -162,22 +245,18 @@ fun FirefoxVpnDialog(
 
                     Button(
                         onClick = {
-                            val parsedPort = port.toIntOrNull()?.coerceIn(1, 65535) ?: 10810
-                            onSave(account.trim(), token.trim(), country.trim().lowercase().ifBlank { "us" }, parsedPort)
+                            val parsedPort = port.toIntOrNull()?.takeIf { it in 1024..65535 } ?: 10810
+                            onSave(account.trim(), token.trim(), country.trim().lowercase(), parsedPort)
                             onDismiss()
                         },
                         modifier = Modifier.weight(1f).height(46.dp),
                         shape = RoundedCornerShape(12.dp),
-                        colors = ButtonDefaults.buttonColors(
-                            containerColor = Color(0xFFFF944D),
-                            contentColor = Color.White
-                        )
+                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFFF944D))
                     ) {
-                        Text(strings.SAVE, fontWeight = FontWeight.Bold, fontSize = 14.sp)
+                        Text(strings.SAVE, color = Color.White, fontWeight = FontWeight.Bold, fontSize = 14.sp)
                     }
                 }
             }
         }
     }
 }
-
