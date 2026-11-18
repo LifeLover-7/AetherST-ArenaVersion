@@ -282,44 +282,39 @@ class AetherProcessRunner(private val context: PlatformContext) {
                 env["AETHER_ROUTES_FILE"] = routingFile.absolutePath
             }
             if (isMasqueBased) {
-                when (config.effectiveHttpVersion()) {
-                    MasqueHttpVersion.H2 -> {
-                        command.add("--h2")
-                    }
-                    MasqueHttpVersion.H1 -> {
-                        command.add("--no-h2")
-                        command.add("--no-quic-v2")
-                    }
-                    MasqueHttpVersion.H3 -> {
-                        // H3 uses native QUIC without --h2 flag
-                    }
-                    MasqueHttpVersion.AUTO -> {
-                        if (config.h2Mode) command.add("--h2")
-                    }
+            when (config.effectiveHttpVersion()) {
+                MasqueHttpVersion.H2 -> {
+                    env["AETHER_MASQUE_HTTP2"] = "1"
                 }
-                if (config.echEnabled) {
-                    command.add("--ech")
-                    command.add("auto")
+                MasqueHttpVersion.H1 -> {
+                    env["AETHER_MASQUE_HTTP2"] = "0"
+                    env["AETHER_QUIC_V2"] = "0"
                 }
-                if (config.h2Fragment) {
-                    command.add("--fragment")
-                    command.add("--fragment-size")
-                    command.add(config.fragmentSize.ifBlank { "30-60" })
-                    command.add("--fragment-delay")
-                    command.add(config.fragmentDelay.ifBlank { "5-15" })
+                MasqueHttpVersion.H3 -> {
+                    env["AETHER_MASQUE_HTTP2"] = "0"
+                    env["AETHER_QUIC_V2"] = "1"
                 }
-                val effectiveSni = if (config.masqueSni.isNotBlank()) {
-                    config.masqueSni.trim()
-                } else if (config.protocol != AetherProtocol.ZERO_TRUST) {
-                    "consumer-masque.cloudflareclient.com"
-                } else {
-                    ""
-                }
-                if (effectiveSni.isNotBlank()) {
-                    command.add("--masque-sni")
-                    command.add(effectiveSni)
+                MasqueHttpVersion.AUTO -> {
+                    if (config.h2Mode) env["AETHER_MASQUE_HTTP2"] = "1"
                 }
             }
+            if (config.echEnabled) env["AETHER_ECH"] = "auto"
+            if (config.h2Fragment) {
+                env["AETHER_MASQUE_H2_FRAGMENT"] = "1"
+                env["AETHER_MASQUE_H2_FRAGMENT_SIZE"] = config.fragmentSize.ifBlank { "30-60" }
+                env["AETHER_MASQUE_H2_FRAGMENT_DELAY"] = config.fragmentDelay.ifBlank { "5-15" }
+            }
+            val effectiveSni = if (config.masqueSni.isNotBlank()) {
+                config.masqueSni.trim()
+            } else if (config.protocol != AetherProtocol.ZERO_TRUST) {
+                "consumer-masque.cloudflareclient.com"
+            } else {
+                ""
+            }
+            if (effectiveSni.isNotBlank()) {
+                env["AETHER_MASQUE_SNI"] = effectiveSni
+            }
+        }
             if (config.mimEnabled) {
                 env["AETHER_MIM"] = "1"
                 if (config.mimOuter.isNotBlank()) env["AETHER_MIM_OUTER_PEER"] = config.mimOuter.trim()
