@@ -59,6 +59,8 @@ class ConnectionController private constructor(context: Context) : ConnectionCon
     private var hasManualTraffic = false
     private var useTrafficStatsFallback = true
 
+    private val neighborCountries = setOf("TR", "AZ", "AM", "GE", "AE", "OM", "IQ", "BH", "KW", "QA")
+
     companion object {
         const val ACTION_STATUS_CHANGED = "io.github.immaghzbad.aetherst.STATUS_CHANGED"
 
@@ -137,13 +139,11 @@ class ConnectionController private constructor(context: Context) : ConnectionCon
             notifyStatusChanged(appContext, ConnectionStatus.STARTING)
         }
         try {
-            // پاک‌سازی کش اتصال قبلی در شروع اتصال جدید تا بار اول روی سرور مرده گیر نکند
             clearLastconn()
 
             val config = AetherConfigRepository.getInstance(getSettings(PlatformContext(appContext))).config.value.effectiveZeroTrustConfig()
             var effectiveConfig = config
 
-            // تنظیم بهینه GOOL مطابق معماری مدرن Aether v2.4.0 (تونل WireGuard داخل MASQUE)
             if (effectiveConfig.protocol == AetherProtocol.GOOL) {
                 effectiveConfig = effectiveConfig.copy(
                     ipMode = if (effectiveConfig.ipMode == AetherIpMode.AUTO) AetherIpMode.IPV4 else effectiveConfig.ipMode,
@@ -172,7 +172,6 @@ class ConnectionController private constructor(context: Context) : ConnectionCon
             val psiphonSupported = PsiphonController.isSupported(effectiveConfig) && effectiveConfig.chainProvider == ChainProvider.PSIPHON
             val torSupported = TorController.isSupported(effectiveConfig) && effectiveConfig.chainProvider == ChainProvider.TOR
 
-            // اطمینان از فعال بودن HTTP Proxy داخلی هسته هنگام استفاده از زنجیره سایفون
             if (psiphonSupported && !effectiveConfig.psiphonOnly) {
                 val coreSocks = effectiveConfig.socksPort.toIntOrNull() ?: 2021
                 val cfgHttp = effectiveConfig.httpPort.toIntOrNull() ?: 2020
@@ -1004,17 +1003,42 @@ class ConnectionController private constructor(context: Context) : ConnectionCon
     private suspend fun startAetherInternal(config: AetherConfig, bindAddress: String, attemptId: Long): Boolean {
         mimGuardActive = false
         Bridge.mimGuardActive = false
-        if (!startAetherValidated(config, bindAddress, attemptId)) {
-            return false
-        }
-        if (activeAttemptId.get() != attemptId) return false
 
-        scope.launch {
-            val exit = lookupTunnelExitCountry(config, attemptId)
-            if (exit != null) {
-                LogRepository.i("[ExitGuard] Exit country confirmed: $exit (Protocol: ${config.protocol})")
+        val maxRerolls = if (config.protocol == AetherProtocol.GOOL && config.goolNeighborEgress) 3 else 1
+        for (reroll in 1..maxRerolls) {
+            if (reroll > 1) {
+                LogRepository.i("[GOOL] Exit country was distant; re-rolling endpoint ($reroll/$maxRerolls)...")
+                runner.stop()
+                delay(600.milliseconds)
+                if (activeAttemptId.get() != attemptId) return false
+                notifyStatusChanged(appContext, ConnectionStatus.STARTING)
             }
+
+            if (!startAetherValidated(config, bindAddress, attemptId)) {
+                return false
+            }
+            if (activeAttemptId.get() != attemptId) return false
+
+            if (config.protocol == AetherProtocol.GOOL && config.goolNeighborEgress && reroll < maxRerolls) {
+                val exit = lookupTunnelExitCountry(config, attemptId)
+                if (exit != null && exit !in neighborCountries) {
+                    LogRepository.w("[GOOL] Detected distant exit ($exit); retrying for neighboring country...")
+                    continue
+                } else if (exit != null) {
+                    LogRepository.i("[GOOL] Locked onto neighboring exit country: $exit")
+                    break
+                }
+            } else {
+                scope.launch {
+                    val exit = lookupTunnelExitCountry(config, attemptId)
+                    if (exit != null) {
+                        LogRepository.i("[ExitGuard] Exit country confirmed: $exit (Protocol: ${config.protocol})")
+                    }
+                }
+            }
+            break
         }
+
         return finishCoreStart(config, attemptId)
     }
 
