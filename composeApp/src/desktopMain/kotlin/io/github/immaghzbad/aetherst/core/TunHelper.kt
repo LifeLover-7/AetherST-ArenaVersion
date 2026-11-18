@@ -192,7 +192,7 @@ object TunHelper {
         |${'$'}bin = '$escapedBin'
         |if (-not (Test-Path ${'$'}data)) { New-Item -ItemType Directory -Path ${'$'}data -Force | Out-Null }
         |if (-not (Test-Path ${'$'}bin)) { New-Item -ItemType Directory -Path ${'$'}bin -Force | Out-Null }
-        |${'$'}logFile = Join-Path${'$'}data '$HELPER_LOG'
+        |${'$'}logFile = Join-Path ${'$'}data '$HELPER_LOG'
         |function L(${'$'}m) { "${'$'}(Get-Date -Format 'HH:mm:ss') ${'$'}m" | Out-File ${'$'}logFile -Append }
         |function Convert-CidrToMask([int]${'$'}prefix) {
         |  if (${'$'}prefix -le 0) { return "0.0.0.0" }
@@ -206,4 +206,221 @@ object TunHelper {
         |    netsh interface ipv4 set subinterface ${'$'}ifIndex mtu=${'$'}params.mtu store=active 2>&1 | Out-Null
         |  } catch {}
         |  ${'$'}r1 = route add 0.0.0.0 mask 128.0.0.0 ${'$'}params.tunIp metric 1 if ${'$'}ifIndex 2>&1
-        |  ${'$'}r2 = route add 128.0.0.0 mask 128.0
+        |  ${'$'}r2 = route add 128.0.0.0 mask 128.0.0.0 ${'$'}params.tunIp metric 1 if ${'$'}ifIndex 2>&1
+        |  L "route add: ${'$'}r1"
+        |  L "route add: ${'$'}r2"
+        |  try {
+        |    New-NetFirewallRule -DisplayName 'AetherST_Block_IPv6' -Direction Outbound -Action Block -RemoteAddress '::/0' -ErrorAction SilentlyContinue | Out-Null
+        |    L "IPv6 leak protection activated"
+        |  } catch {}
+        |  try {
+        |    Clear-DnsClientCache -ErrorAction SilentlyContinue | Out-Null
+        |    Get-NetAdapter | Where-Object { ${'$'}_.InterfaceIndex -ne ${'$'}ifIndex -and ${'$'}_.Status -eq 'Up' } | ForEach-Object {
+        |      Set-DnsClientServerAddress -InterfaceIndex ${'$'}_.InterfaceIndex -ServerAddresses '1.1.1.1','1.0.0.1' -ErrorAction SilentlyContinue
+        |    }
+        |    L "DNS cache cleared & leak protection applied to physical adapters"
+        |  } catch {}
+        |}
+        |function Test-TunRoutes {
+        |  ${'$'}t = route print -4 | Select-String "128.0.0.0"
+        |  return ((${'$'}t | Measure-Object).Count -ge 2)
+        |}
+        |L "helper started (app pid ${'$'}AppPid) data=${'$'}data bin=${'$'}bin"
+        |${'$'}params = Get-Content (Join-Path ${'$'}data '$PARAMS_FILE') -Raw | ConvertFrom-Json
+        |${'$'}exe = Join-Path ${'$'}bin 'hev-socks5-tunnel.exe'
+        |${'$'}yml = Join-Path ${'$'}data '$HEV_YAML'
+        |${'$'}stopFile = Join-Path ${'$'}data '$STOP_FLAG'
+        |if (-not (Test-Path ${'$'}exe)) {
+        |  ${'$'}alt = Join-Path ${'$'}data 'hev-socks5-tunnel.exe'
+        |  if (Test-Path ${'$'}alt) { ${'$'}exe = ${'$'}alt }
+        |}
+        |if (-not (Test-Path ${'$'}exe)) { L "ERROR: hev binary missing at ${'$'}exe"; exit 1 }
+        |if (-not (Test-Path ${'$'}yml)) { L "ERROR: yml missing at ${'$'}yml"; exit 1 }
+        |${'$'}hev = Start-Process -FilePath ${'$'}exe -ArgumentList "`"${'$'}yml`"" -WorkingDirectory ${'$'}bin -PassThru -WindowStyle Hidden -RedirectStandardOutput (Join-Path ${'$'}data '$HEV_OUT') -RedirectStandardError (Join-Path ${'$'}data '$HEV_ERR')
+        |L "hev started pid ${'$'}(${'$'}hev.Id) exe=${'$'}exe yml=${'$'}yml"
+        |${'$'}ifIndex = ${'$'}null
+        |for (${'$'}i = 0; ${'$'}i -lt 40; ${'$'}i++) {
+        |  Start-Sleep -Milliseconds 500
+        |  ${'$'}line = netsh interface ipv4 show interfaces | Select-String ${'$'}params.tunName
+        |  if (${'$'}line) {
+        |    ${'$'}toks = ${'$'}line.ToString().Trim() -split '\s+'
+        |    if (${'$'}toks.Count -ge 2) { ${'$'}ifIndex = ${'$'}toks[0]; break }
+        |  }
+        |}
+        |if (-not ${'$'}ifIndex) {
+        |  L "ERROR: tun adapter not found"
+        |  if (Get-Process -Id ${'$'}hev.Id -ErrorAction SilentlyContinue) { Stop-Process -Id ${'$'}hev.Id -Force }
+        |  exit 1
+        |}
+        |L "adapter found index ${'$'}ifIndex"
+        |try { Set-NetIPInterface -InterfaceIndex ${'$'}ifIndex -InterfaceMetric 1 -NlMtu ${'$'}params.mtu -ErrorAction SilentlyContinue | Out-Null } catch {}
+        |try { Set-DnsClientServerAddress -InterfaceIndex ${'$'}ifIndex -ServerAddresses ${'$'}params.dnsFake -ErrorAction Stop | Out-Null } catch { netsh interface ipv4 set dnsservers name="$(${'$'}params.tunName)" static ${'$'}params.dnsFake primary 2>&1 | Out-Null }
+        |Add-TunRoutes ${'$'}ifIndex
+        |L "routes present: $(Test-TunRoutes)"
+        |function Apply-SplitTunnelingRules(${'$'}tunAlias) {
+        |  Get-NetFirewallRule -DisplayName "AetherST_Split_*" -ErrorAction SilentlyContinue | Remove-NetFirewallRule -ErrorAction SilentlyContinue
+        |  foreach (${'$'}exe in ${'$'}params.blockedExes) {
+        |    if (${'$'}exe -and (Test-Path ${'$'}exe)) {
+        |      ${'$'}hash = [Math]::Abs(${'$'}exe.GetHashCode())
+        |      New-NetFirewallRule -DisplayName "AetherST_Split_Block_${'$'}hash" -Direction Outbound -Program ${'$'}exe -Action Block -ErrorAction SilentlyContinue | Out-Null
+        |      L "Firewall BLOCK rule for: ${'$'}exe"
+        |    }
+        |  }
+        |  if (${'$'}params.tunnelAllApps) {
+        |    foreach (${'$'}exe in ${'$'}params.bypassExes) {
+        |      if (${'$'}exe -and (Test-Path ${'$'}exe)) {
+        |        ${'$'}hash = [Math]::Abs(${'$'}exe.GetHashCode())
+        |        New-NetFirewallRule -DisplayName "AetherST_Split_Bypass_${'$'}hash" -Direction Outbound -Program ${'$'}exe -InterfaceAlias ${'$'}tunAlias -Action Block -ErrorAction SilentlyContinue | Out-Null
+        |        L "Firewall BYPASS rule for: ${'$'}exe"
+        |      }
+        |    }
+        |  }
+        |}
+        |Apply-SplitTunnelingRules ${'$'}params.tunName
+        |${'$'}gw = (Get-NetRoute -DestinationPrefix '0.0.0.0/0' -ErrorAction SilentlyContinue | Where-Object { ${'$'}_.InterfaceAlias -ne ${'$'}params.tunName -and ${'$'}_.NextHop -ne '0.0.0.0' } | Sort-Object RouteMetric | Select-Object -First 1).NextHop
+        |if (-not ${'$'}gw) { ${'$'}gw = (Get-NetIPConfiguration | Where-Object { ${'$'}_.NetAdapter.Status -eq 'Up' -and ${'$'}_.IPv4DefaultGateway -ne ${'$'}null } | Select-Object -First 1).IPv4DefaultGateway.NextHop }
+        |L "physical gateway ${'$'}gw"
+        |${'$'}cfRanges = @(
+        |  @{ ip = '162.159.192.0'; mask = '255.255.255.0' },
+        |  @{ ip = '162.159.193.0'; mask = '255.255.255.0' },
+        |  @{ ip = '162.159.195.0'; mask = '255.255.255.0' },
+        |  @{ ip = '188.114.96.0'; mask = '255.255.255.0' },
+        |  @{ ip = '188.114.97.0'; mask = '255.255.255.0' },
+        |  @{ ip = '188.114.98.0'; mask = '255.255.255.0' },
+        |  @{ ip = '188.114.99.0'; mask = '255.255.255.0' },
+        |  @{ ip = '172.64.0.0'; mask = '255.248.0.0' }
+        |)
+        |foreach (${'$'}r in ${'$'}cfRanges) {
+        |  if (${'$'}gw) { route add ${'$'}r.ip mask ${'$'}r.mask ${'$'}gw metric 1 2>&1 | Out-Null }
+        |}
+        |foreach (${'$'}ip in ${'$'}params.endpointIps) {
+        |  if (${'$'}ip -and ${'$'}gw) { route add ${'$'}ip mask 255.255.255.255 ${'$'}gw metric 1 2>&1 | Out-Null }
+        |}
+        |${'$'}appliedDirect = @()
+        |foreach (${'$'}entry in ${'$'}params.directIps) {
+        |  if (${'$'}entry -and ${'$'}gw) {
+        |    if (${'$'}entry -match '^(\d+\.\d+\.\d+\.\d+)/(\d+)${'$'}') {
+        |      ${'$'}netIp = ${'$'}Matches[1]
+        |      ${'$'}mask = Convert-CidrToMask ([int]${'$'}Matches[2])
+        |      route add ${'$'}netIp mask ${'$'}mask ${'$'}gw metric 1 2>&1 | Out-Null
+        |      ${'$'}appliedDirect += @{ ip = ${'$'}netIp; mask = ${'$'}mask }
+        |    } elseif (${'$'}entry -match '^\d+\.\d+\.\d+\.\d+${'$'}') {
+        |      route add ${'$'}entry mask 255.255.255.255 ${'$'}gw metric 1 2>&1 | Out-Null
+        |      ${'$'}appliedDirect += @{ ip = ${'$'}entry; mask = '255.255.255.255' }
+        |    }
+        |  }
+        |}
+        |L "Applied direct routes count: ${'$'}(${'$'}appliedDirect.Count)"
+        |${'$'}state = @{
+        |  ifIndex = "${'$'}ifIndex"
+        |  tunIp = "${'$'}(${'$'}params.tunIp)"
+        |  gw = "${'$'}gw"
+        |  hevPid = ${'$'}hev.Id
+        |  endpointIps = @(${'$'}params.endpointIps)
+        |  directRoutes = @(${'$'}appliedDirect)
+        |}
+        |${'$'}state | ConvertTo-Json -Depth 4 | Out-File (Join-Path ${'$'}data 'tun-state.json') -Encoding utf8
+        |L "TUN setup complete. PowerShell exiting to save RAM."
+        |exit 0
+        |""".trimMargin()
+        File(dataDir, "tun-helper.ps1").writeText(script)
+    }
+
+    private fun writeCleanupScript(dataDir: File) {
+        val dataPath = dataDir.absolutePath
+        val escapedData = dataPath.replace("'", "''")
+        val script = """
+        |${'$'}ErrorActionPreference = 'SilentlyContinue'
+        |${'$'}data = '$escapedData'
+        |${'$'}logFile = Join-Path${'$'}data '$HELPER_LOG'
+        |function L(${'$'}m) { "${'$'}(Get-Date -Format 'HH:mm:ss') ${'$'}m" | Out-File ${'$'}logFile -Append }
+        |L "helper cleanup started"
+        |try { Remove-NetFirewallRule -DisplayName 'AetherST_Block_IPv6' -ErrorAction SilentlyContinue | Out-Null } catch {}
+        |try { Get-NetFirewallRule -DisplayName "AetherST_Split_*" -ErrorAction SilentlyContinue | Remove-NetFirewallRule -ErrorAction SilentlyContinue } catch {}
+        |try { Clear-DnsClientCache -ErrorAction SilentlyContinue | Out-Null } catch {}
+        |try { Get-NetAdapter | Where-Object { ${'$'}_.Status -eq 'Up' } | ForEach-Object { Set-DnsClientServerAddress -InterfaceIndex ${'$'}_.InterfaceIndex -ResetServerAddresses -ErrorAction SilentlyContinue } } catch {}
+        |${'$'}stateFile = Join-Path ${'$'}data 'tun-state.json'
+        |if (Test-Path ${'$'}stateFile) {
+        |  try {
+        |    ${'$'}state = Get-Content ${'$'}stateFile -Raw | ConvertFrom-Json
+        |    if (${'$'}state.ifIndex -and ${'$'}state.tunIp) {
+        |      route delete 0.0.0.0 mask 128.0.0.0 ${'$'}state.tunIp metric 1 if ${'$'}state.ifIndex 2>&1 | Out-Null
+        |      route delete 128.0.0.0 mask 128.0.0.0 ${'$'}state.tunIp metric 1 if ${'$'}state.ifIndex 2>&1 | Out-Null
+        |    }
+        |    if (${'$'}state.endpointIps -and ${'$'}state.gw) {
+        |      foreach (${'$'}ip in ${'$'}state.endpointIps) {
+        |        if (${'$'}ip) { route delete ${'$'}ip mask 255.255.255.255 ${'$'}state.gw 2>&1 | Out-Null }
+        |      }
+        |    }
+        |    if (${'$'}state.directRoutes -and ${'$'}state.gw) {
+        |      foreach (${'$'}dr in ${'$'}state.directRoutes) {
+        |        if (${'$'}dr.ip -and ${'$'}dr.mask) { route delete ${'$'}dr.ip mask ${'$'}dr.mask ${'$'}state.gw 2>&1 | Out-Null }
+        |      }
+        |    }
+        |    if (${'$'}state.hevPid) {
+        |      Stop-Process -Id ${'$'}state.hevPid -Force -ErrorAction SilentlyContinue
+        |    }
+        |  } catch {}
+        |  Remove-Item ${'$'}stateFile -ErrorAction SilentlyContinue
+        |}
+        |${'$'}cfRanges = @(
+        |  @{ ip = '162.159.192.0'; mask = '255.255.255.0' },
+        |  @{ ip = '162.159.193.0'; mask = '255.255.255.0' },
+        |  @{ ip = '162.159.195.0'; mask = '255.255.255.0' },
+        |  @{ ip = '188.114.96.0'; mask = '255.255.255.0' },
+        |  @{ ip = '188.114.97.0'; mask = '255.255.255.0' },
+        |  @{ ip = '188.114.98.0'; mask = '255.255.255.0' },
+        |  @{ ip = '188.114.99.0'; mask = '255.255.255.0' },
+        |  @{ ip = '172.64.0.0'; mask = '255.248.0.0' }
+        |)
+        |foreach (${'$'}r in ${'$'}cfRanges) {
+        |  route delete ${'$'}r.ip mask ${'$'}r.mask 2>&1 | Out-Null
+        |}
+        |route delete 0.0.0.0 mask 128.0.0.0 $TUN_IPV4 2>&1 | Out-Null
+        |route delete 128.0.0.0 mask 128.0.0.0 $TUN_IPV4 2>&1 | Out-Null
+        |Get-Process -Name 'hev-socks5-tunnel' -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+        |Remove-Item (Join-Path ${'$'}data '$STOP_FLAG') -ErrorAction SilentlyContinue
+        |L "helper cleanup done"
+        |exit 0
+        |""".trimMargin()
+        File(dataDir, "tun-cleanup.ps1").writeText(script)
+    }
+
+    private fun startTailing(dataDir: File) {
+        tailThread = Thread {
+            val helperFile = File(dataDir, HELPER_LOG)
+            var helperOffset = 0L
+            var checkCounter = 0
+            while (isRunning.get()) {
+                try {
+                    if (helperFile.exists()) {
+                        val len = helperFile.length()
+                        if (len > helperOffset) {
+                            java.io.RandomAccessFile(helperFile, "r").use { raf ->
+                                raf.seek(helperOffset)
+                                val bytes = ByteArray((len - helperOffset).toInt())
+                                raf.readFully(bytes)
+                                helperOffset = len
+                                String(bytes).lineSequence().filter { it.isNotBlank() }.forEach {
+                                    LogRepository.i("[Tun] $it")
+                                }
+                            }
+                        }
+                    }
+                    checkCounter++
+                    if (checkCounter % 5 == 0) {
+                        val isHevAlive = ProcessHandle.allProcesses().anyMatch {
+                            it.info().command().map { c -> c.contains("hev-socks5-tunnel", ignoreCase = true) }.orElse(false)
+                        }
+                        if (!isHevAlive && isRunning.get()) {
+                            LogRepository.w("[Tun] hev-socks5-tunnel process exited unexpectedly")
+                        }
+                    }
+                } catch (_: Exception) {}
+                Thread.sleep(1000)
+            }
+        }
+        tailThread?.isDaemon = true
+        tailThread?.start()
+    }
+}
