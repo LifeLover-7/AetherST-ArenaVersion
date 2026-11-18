@@ -18,9 +18,6 @@ import java.util.concurrent.atomic.AtomicBoolean
  * Chains the secondary WireGuard tunnel (e.g. Proton VPN) inside
  * an unblocked outer Layer-3 transport (Cloudflare WARP WireGuard),
  * completely bypassing TCP SOCKS5 UDP limitations with native netstack detour.
- *
- * Exposes a clean local SOCKS5 listener on [localListenPort] (default 10805)
- * for seamless integration with AetherVpnService (Android) and TunHelper (Desktop).
  */
 class WireGuardExitTunnel(
     private val config: CustomWireGuardConfig,
@@ -39,20 +36,26 @@ class WireGuardExitTunnel(
     var verifiedExitIp: String? = null
         private set
 
+    @Volatile
+    var lastErrorMessage: String? = null
+        private set
+
     fun start(): Boolean {
         if (isRunning.getAndSet(true)) return true
+        verifiedExitIp = null
+        lastErrorMessage = null
+
         if (!config.isValid()) {
-            LogRepository.e("[WgExit] Invalid configuration: Endpoint, PrivateKey or PublicKey is missing", "WgExit")
+            lastErrorMessage = "Invalid WireGuard config: Endpoint, PrivateKey or PublicKey is missing"
+            LogRepository.e("[WgExit] $lastErrorMessage", "WgExit")
             isRunning.set(false)
             return false
         }
 
         val binPath = binaryPath?.takeIf { File(it).exists() } ?: findSingBoxBinary()
         if (binPath == null) {
-            LogRepository.e(
-                "[WgExit] Userspace engine binary (sing-box) not found. Please place sing-box.exe in resources/bin folder.",
-                "WgExit"
-            )
+            lastErrorMessage = "sing-box binary not found"
+            LogRepository.e("[WgExit] $lastErrorMessage", "WgExit")
             isRunning.set(false)
             return false
         }
@@ -74,10 +77,15 @@ class WireGuardExitTunnel(
             val workDir = File(workDirStr)
             workDir.mkdirs()
 
-            // 1. Resolve Cloudflare WARP outer identity from primary Aether session
+            // 1. Resolve Cloudflare WARP outer identity from primary Aether session (Android filesDir or Desktop .aether)
             val warpIdentity = loadWarpIdentity(workDir)
+            if (warpIdentity != null) {
+                LogRepository.i("[WgExit] Loaded outer WARP identity (endpoint=${warpIdentity.endpoint}:${warpIdentity.port}, ip=${warpIdentity.ipv4})", "WgExit")
+            } else {
+                LogRepository.w("[WgExit] Outer WARP identity (aether.toml) not found in ${workDir.absolutePath}; falling back to SOCKS5 upstream", "WgExit")
+            }
 
-            // 2. Generate sing-box userspace WireGuard configuration
+            // 2. Generate sing-box userspace WireGuard-in-WireGuard configuration
             val cfgJson = buildSingBoxConfig(
                 listenPort = localListenPort,
                 endpointHost = endpointHost,
@@ -94,9 +102,13 @@ class WireGuardExitTunnel(
             cFile.writeText(cfgJson)
             configFile = cFile
 
-            val detourDesc = if (primarySocksPort > 0) "Aether Upstream (127.0.0.1:$primarySocksPort)" else if (warpIdentity != null) "Cloudflare WARP (WG)" else "Direct"
+            val detourDesc = when {
+                warpIdentity != null -> "Native WireGuard-in-WireGuard (WARP ${warpIdentity.endpoint}:${warpIdentity.port})"
+                primarySocksPort > 0 -> "Aether Upstream SOCKS5 (127.0.0.1:$primarySocksPort)"
+                else -> "Direct"
+            }
             LogRepository.i(
-                "[WgExit] Launching userspace WireGuard engine (Server: $endpointHost:$endpointPort, Detour: $detourDesc, Port: $localListenPort)...",
+                "[WgExit] Launching sing-box (Proton: $endpointHost:$endpointPort, Detour: $detourDesc, LocalPort: $localListenPort)...",
                 "WgExit"
             )
 
@@ -119,7 +131,7 @@ class WireGuardExitTunnel(
                             } else if (l.contains("WARN", ignoreCase = true)) {
                                 LogRepository.w("[sing-box] $l", "sing-box")
                             } else {
-                                LogRepository.d("[sing-box] $l", "sing-box")
+                                LogRepository.i("[sing-box] $l", "sing-box")
                             }
                         }
                     }
@@ -130,6 +142,12 @@ class WireGuardExitTunnel(
             var portReady = false
             val startWait = System.currentTimeMillis()
             while (System.currentTimeMillis() - startWait < 8000) {
+                if (!proc.isAlive) {
+                    lastErrorMessage = "sing-box process exited prematurely (code=${proc.exitValue()})"
+                    LogRepository.e("[WgExit] $lastErrorMessage", "WgExit")
+                    stop()
+                    return false
+                }
                 if (isPortListening("127.0.0.1", localListenPort)) {
                     portReady = true
                     break
@@ -138,25 +156,28 @@ class WireGuardExitTunnel(
             }
 
             if (!portReady) {
-                LogRepository.e("[WgExit] Userspace engine listener failed to bind on 127.0.0.1:$localListenPort within 8s", "WgExit")
+                lastErrorMessage = "sing-box listener failed to bind on 127.0.0.1:$localListenPort within 8s"
+                LogRepository.e("[WgExit] $lastErrorMessage", "WgExit")
                 stop()
                 return false
             }
 
-            // 5. Data Plane Verification: Verify real packet flow & verify Non-Iran IP
-            LogRepository.i("[WgExit] Verifying data plane packet flow through secondary WireGuard tunnel...", "WgExit")
+            // 5. Data Plane Verification: Verify real packet flow & confirm Exit IP is NOT Iranian and NOT Cloudflare WARP
+            LogRepository.i("[WgExit] Verifying end-to-end packet flow through Proton WireGuard...", "WgExit")
             val verifiedIp = verifyDataPlane(localListenPort)
             if (verifiedIp != null) {
                 verifiedExitIp = verifiedIp
-                LogRepository.i("[WgExit] WireGuard exit node successfully connected and verified! Non-Iran Exit IP: $verifiedIp", "WgExit")
+                LogRepository.i("[WgExit] Proton WireGuard exit node verified! Exit IP: $verifiedIp", "WgExit")
                 true
             } else {
-                LogRepository.e("[WgExit] Data plane verification failed or detected Iranian exit IP. WireGuard handshake failed to reach egress. Aborting fake connection.", "WgExit")
+                lastErrorMessage = "Proton WireGuard handshake or data-plane verification failed (check server endpoint or key)"
+                LogRepository.e("[WgExit] $lastErrorMessage", "WgExit")
                 stop()
                 false
             }
         } catch (e: Exception) {
-            LogRepository.e("[WgExit] Startup exception: ${e.message}", "WgExit")
+            lastErrorMessage = "Startup exception: ${e.message}"
+            LogRepository.e("[WgExit] $lastErrorMessage", "WgExit")
             stop()
             false
         }
@@ -208,22 +229,31 @@ class WireGuardExitTunnel(
     )
 
     private fun loadWarpIdentity(workDir: File): WarpIdentity? {
-        val searchDirs = listOf(
+        val searchDirs = listOfNotNull(
             workDir,
+            workDir.parentFile,
+            File(workDir, "bin"),
             File(System.getProperty("user.home", "."), ".aether"),
             File(System.getenv("AppData") ?: ".", "AetherST-Tunnel/bin"),
             File(System.getProperty("user.dir", ".")),
             File(".")
-        )
-        val fileNames = listOf("aether-masque.toml", "aether.toml")
+        ).distinct()
+
+        val fileNames = listOf("aether-masque.toml", "aether.toml", "wgcf-profile.conf")
 
         for (dir in searchDirs) {
+            if (!dir.exists() || !dir.isDirectory) continue
             for (fn in fileNames) {
                 val f = File(dir, fn)
                 if (f.exists() && f.length() > 0) {
                     val parsed = parseWarpIdentityFromToml(f)
                     if (parsed != null) return parsed
                 }
+            }
+            // Also scan any *-lastconn.toml or aether-*.toml generated by core
+            dir.listFiles()?.filter { it.name.startsWith("aether") && it.name.endsWith(".toml") && it.length() > 0 }?.forEach { f ->
+                val parsed = parseWarpIdentityFromToml(f)
+                if (parsed != null) return parsed
             }
         }
         return null
@@ -245,15 +275,15 @@ class WireGuardExitTunnel(
                 val k = clean.substringBefore('=').trim().lowercase()
                 val v = clean.substringAfter('=').trim().trim('"', '\'')
                 when (k) {
-                    "assigned_endpoint" -> {
+                    "assigned_endpoint", "endpoint" -> {
                         if (v.isNotBlank()) {
                             endpoint = v.substringBefore(':')
                             port = v.substringAfter(':', "2408").toIntOrNull() ?: 2408
                         }
                     }
-                    "ipv4" -> if (v.isNotBlank()) ipv4 = v
-                    "wg_private_key" -> if (v.isNotBlank()) privKey = v
-                    "wg_peer_public_key" -> if (v.isNotBlank()) pubKey = v
+                    "ipv4", "address" -> if (v.isNotBlank()) ipv4 = v.substringBefore('/').substringBefore(',').trim()
+                    "wg_private_key", "private_key", "privatekey" -> if (v.isNotBlank()) privKey = v
+                    "wg_peer_public_key", "peer_public_key", "publickey" -> if (v.isNotBlank()) pubKey = v
                     "client_id" -> {
                         if (v.isNotBlank()) {
                             try {
@@ -287,7 +317,9 @@ class WireGuardExitTunnel(
     }
 
     /**
-     * Builds sing-box JSON configuration with userspace WireGuard-in-WireGuard detour.
+     * Builds sing-box JSON configuration with true Layer-3 WireGuard-in-WireGuard detour.
+     * Priority 1: Native outer-warp WireGuard -> inner proton-exit WireGuard (UDP-native, zero packet drop).
+     * Priority 2: Fallback to upstream SOCKS5 if WARP identity is unavailable.
      */
     private fun buildSingBoxConfig(
         listenPort: Int,
@@ -306,57 +338,61 @@ class WireGuardExitTunnel(
             localAddresses.add("\"$safeV6\"")
         }
 
-        val hasUpstreamSocks = primarySocksPort > 0
-        val innerDetour = if (hasUpstreamSocks) "aether-upstream" else if (warpIdentity != null) "outer-warp" else "direct"
-
-        val upstreamOutbound = if (hasUpstreamSocks) {
-            """
-            {
-              "type": "socks",
-              "tag": "aether-upstream",
-              "server": "$primarySocksHost",
-              "server_port": $primarySocksPort
-            },
-            """.trimIndent()
-        } else {
-            ""
+        // Prefer native outer-warp WireGuard so Proton UDP packets travel inside Layer-3 WireGuard tunnel
+        val useNativeWarp = warpIdentity != null
+        val useUpstreamSocks = !useNativeWarp && primarySocksPort > 0
+        val innerDetour = when {
+            useNativeWarp -> "outer-warp"
+            useUpstreamSocks -> "aether-upstream"
+            else -> "direct"
         }
 
-        val warpOutbound = if (!hasUpstreamSocks && warpIdentity != null) {
-            val warp = warpIdentity
-            """
-            {
-              "type": "wireguard",
-              "tag": "outer-warp",
-              "server": "${warp.endpoint}",
-              "server_port": ${warp.port},
-              "local_address": ["${warp.ipv4}/32"],
-              "private_key": "${warp.privateKey}",
-              "peer_public_key": "${warp.publicKey}",
-              "reserved": [${warp.reserved.joinToString(", ")}],
-              "mtu": 1280,
-              "detour": "direct"
-            },
-            """.trimIndent()
-        } else {
-            ""
+        val outerOutbound = when {
+            useNativeWarp -> {
+                val warp = warpIdentity!!
+                """
+                {
+                  "type": "wireguard",
+                  "tag": "outer-warp",
+                  "server": "${warp.endpoint}",
+                  "server_port": ${warp.port},
+                  "local_address": ["${warp.ipv4}/32"],
+                  "private_key": "${warp.privateKey}",
+                  "peer_public_key": "${warp.publicKey}",
+                  "reserved": [${warp.reserved.joinToString(", ")}],
+                  "mtu": 1340,
+                  "detour": "direct"
+                },
+                """.trimIndent()
+            }
+            useUpstreamSocks -> {
+                """
+                {
+                  "type": "socks",
+                  "tag": "aether-upstream",
+                  "server": "$primarySocksHost",
+                  "server_port": $primarySocksPort
+                },
+                """.trimIndent()
+            }
+            else -> ""
         }
 
         return """
         {
           "log": {
-            "level": "warn",
+            "level": "info",
             "timestamp": true
           },
           "dns": {
             "servers": [
               {
-                "tag": "dns-wireguard",
-                "address": "1.1.1.1",
+                "tag": "dns-proton",
+                "address": "tcp://1.1.1.1",
                 "detour": "proton-exit"
               },
               {
-                "tag": "dns-upstream",
+                "tag": "dns-outer",
                 "address": "tcp://1.1.1.1",
                 "detour": "$innerDetour"
               }
@@ -364,7 +400,7 @@ class WireGuardExitTunnel(
             "rules": [
               {
                 "outbound": "any",
-                "server": "dns-wireguard"
+                "server": "dns-proton"
               }
             ],
             "strategy": "prefer_ipv4"
@@ -395,8 +431,7 @@ class WireGuardExitTunnel(
               "mtu": $mtu,
               "detour": "$innerDetour"
             },
-            $upstreamOutbound
-            $warpOutbound
+            $outerOutbound
             {
               "type": "direct",
               "tag": "direct"
@@ -409,23 +444,19 @@ class WireGuardExitTunnel(
                 "outbound": "proton-exit"
               }
             ],
+            "final": "proton-exit",
             "auto_detect_interface": true
           }
         }
         """.trimIndent()
     }
 
-    /**
-     * Data Plane Verification: Sends an HTTP probe via SOCKS5 to ensure packets
-     * genuinely reach the exit node, confirm internet connectivity, and guarantee
-     * that the exit IP is NOT in Iran (IR).
-     */
     private fun verifyDataPlane(socksPort: Int): String? {
-        // Probe 0 (Fastest, zero DNS dependency): Cloudflare trace via direct IP 1.1.1.1:80
+        // Probe 0: Cloudflare trace via direct IP 1.1.1.1:80 (no DNS dependency)
         try {
             Socket().use { socket ->
-                socket.soTimeout = 4000
-                socket.connect(InetSocketAddress("127.0.0.1", socksPort), 2000)
+                socket.soTimeout = 5000
+                socket.connect(InetSocketAddress("127.0.0.1", socksPort), 2500)
                 val out = socket.getOutputStream()
                 val input = socket.getInputStream()
                 out.write(byteArrayOf(0x05, 0x01, 0x00))
@@ -451,7 +482,7 @@ class WireGuardExitTunnel(
                             }
                             0x04.toByte() -> readFully(input, ByteArray(16 + 2))
                         }
-                        val httpReq = "GET /cdn-cgi/trace HTTP/1.1\r\nHost: 1.1.1.1\r\nUser-Agent: AetherST/2.1\r\nConnection: close\r\n\r\n"
+                        val httpReq = "GET /cdn-cgi/trace HTTP/1.1\r\nHost: 1.1.1.1\r\nUser-Agent: AetherST/2.4\r\nConnection: close\r\n\r\n"
                         out.write(httpReq.toByteArray(Charsets.US_ASCII))
                         out.flush()
                         val text = input.bufferedReader(Charsets.US_ASCII).readText()
@@ -466,25 +497,20 @@ class WireGuardExitTunnel(
             }
         } catch (_: Exception) {}
 
-        // Probe 1: ip-api.com with countryCode & IP
+        // Probe 1: ip-api.com
         val targetHost = "ip-api.com"
         val targetPort = 80
-        val timeoutMs = 6000
-
         for (attempt in 1..2) {
             var socket: Socket? = null
             try {
                 socket = Socket()
-                socket.soTimeout = timeoutMs
+                socket.soTimeout = 6000
                 socket.connect(InetSocketAddress("127.0.0.1", socksPort), 2500)
-
                 val out = socket.getOutputStream()
                 val input = socket.getInputStream()
 
-                // SOCKS5 Handshake
                 out.write(byteArrayOf(0x05, 0x01, 0x00))
                 out.flush()
-
                 val authResp = ByteArray(2)
                 readFully(input, authResp)
                 if (authResp[0] != 0x05.toByte() || authResp[1] != 0x00.toByte()) {
@@ -492,18 +518,13 @@ class WireGuardExitTunnel(
                     continue
                 }
 
-                // SOCKS5 CONNECT to ip-api.com:80
                 val hostBytes = targetHost.toByteArray(Charsets.US_ASCII)
                 val req = ByteArray(4 + 1 + hostBytes.size + 2)
-                req[0] = 0x05
-                req[1] = 0x01
-                req[2] = 0x00
-                req[3] = 0x03
+                req[0] = 0x05; req[1] = 0x01; req[2] = 0x00; req[3] = 0x03
                 req[4] = hostBytes.size.toByte()
                 System.arraycopy(hostBytes, 0, req, 5, hostBytes.size)
                 req[req.size - 2] = ((targetPort shr 8) and 0xFF).toByte()
                 req[req.size - 1] = (targetPort and 0xFF).toByte()
-
                 out.write(req)
                 out.flush()
 
@@ -513,7 +534,6 @@ class WireGuardExitTunnel(
                     socket.close()
                     continue
                 }
-
                 when (connResp[3]) {
                     0x01.toByte() -> readFully(input, ByteArray(4 + 2))
                     0x03.toByte() -> {
@@ -523,15 +543,13 @@ class WireGuardExitTunnel(
                     0x04.toByte() -> readFully(input, ByteArray(16 + 2))
                 }
 
-                // HTTP GET request
-                val httpReq = "GET /line/?fields=status,countryCode,query HTTP/1.1\r\nHost: $targetHost\r\nUser-Agent: AetherST/2.1\r\nConnection: close\r\n\r\n"
+                val httpReq = "GET /line/?fields=status,countryCode,query HTTP/1.1\r\nHost: $targetHost\r\nUser-Agent: AetherST/2.4\r\nConnection: close\r\n\r\n"
                 out.write(httpReq.toByteArray(Charsets.US_ASCII))
                 out.flush()
 
                 val reader = BufferedReader(InputStreamReader(input, Charsets.US_ASCII))
                 var inBody = false
                 val bodyLines = mutableListOf<String>()
-
                 while (true) {
                     val line = reader.readLine() ?: break
                     if (inBody) {
@@ -540,15 +558,10 @@ class WireGuardExitTunnel(
                         inBody = true
                     }
                 }
-
                 if (bodyLines.isNotEmpty() && bodyLines[0].equals("success", ignoreCase = true) && bodyLines.size >= 3) {
                     val country = bodyLines[1].uppercase()
                     val ip = bodyLines[2]
-                    if (country == "IR") {
-                        LogRepository.w("[WgExit] Verification rejected: Exit node returned Iranian IP ($ip).", "WgExit")
-                        return null
-                    }
-                    if (ip.matches(Regex("""^\d{1,3}(\.\d{1,3}){3}$"""))) {
+                    if (country != "IR" && ip.matches(Regex("""^\d{1,3}(\.\d{1,3}){3}$"""))) {
                         return ip
                     }
                 }
@@ -557,78 +570,6 @@ class WireGuardExitTunnel(
                 try { socket?.close() } catch (_: Exception) {}
             }
             Thread.sleep(400)
-        }
-
-        // Probe 2 Fallback: api.ipify.org
-        return verifyIpifyFallback(socksPort)
-    }
-
-    private fun verifyIpifyFallback(socksPort: Int): String? {
-        val targetHost = "api.ipify.org"
-        val targetPort = 80
-        var socket: Socket? = null
-        try {
-            socket = Socket()
-            socket.soTimeout = 5000
-            socket.connect(InetSocketAddress("127.0.0.1", socksPort), 2500)
-
-            val out = socket.getOutputStream()
-            val input = socket.getInputStream()
-
-            out.write(byteArrayOf(0x05, 0x01, 0x00))
-            out.flush()
-
-            val authResp = ByteArray(2)
-            readFully(input, authResp)
-            if (authResp[0] != 0x05.toByte() || authResp[1] != 0x00.toByte()) return null
-
-            val hostBytes = targetHost.toByteArray(Charsets.US_ASCII)
-            val req = ByteArray(4 + 1 + hostBytes.size + 2)
-            req[0] = 0x05
-            req[1] = 0x01
-            req[2] = 0x00
-            req[3] = 0x03
-            req[4] = hostBytes.size.toByte()
-            System.arraycopy(hostBytes, 0, req, 5, hostBytes.size)
-            req[req.size - 2] = ((targetPort shr 8) and 0xFF).toByte()
-            req[req.size - 1] = (targetPort and 0xFF).toByte()
-
-            out.write(req)
-            out.flush()
-
-            val connResp = ByteArray(4)
-            readFully(input, connResp)
-            if (connResp[1] != 0x00.toByte()) return null
-
-            when (connResp[3]) {
-                0x01.toByte() -> readFully(input, ByteArray(4 + 2))
-                0x03.toByte() -> {
-                    val len = input.read()
-                    if (len > 0) readFully(input, ByteArray(len + 2))
-                }
-                0x04.toByte() -> readFully(input, ByteArray(16 + 2))
-            }
-
-            val httpReq = "GET / HTTP/1.1\r\nHost: $targetHost\r\nUser-Agent: AetherST/2.1\r\nConnection: close\r\n\r\n"
-            out.write(httpReq.toByteArray(Charsets.US_ASCII))
-            out.flush()
-
-            val reader = BufferedReader(InputStreamReader(input, Charsets.US_ASCII))
-            var inBody = false
-            while (true) {
-                val line = reader.readLine() ?: break
-                if (inBody) {
-                    val ip = line.trim()
-                    if (ip.matches(Regex("""^\d{1,3}(\.\d{1,3}){3}$"""))) {
-                        return ip
-                    }
-                } else if (line.isEmpty()) {
-                    inBody = true
-                }
-            }
-        } catch (_: Exception) {
-        } finally {
-            try { socket?.close() } catch (_: Exception) {}
         }
         return null
     }
@@ -654,10 +595,6 @@ class WireGuardExitTunnel(
     }
 
     companion object {
-        /**
-         * Fast concurrent latency probe across a list of WireGuard profiles.
-         * Runs in background thread pool with zero delay to the user interface.
-         */
         fun probeProfilesFast(
             profiles: List<CustomWireGuardConfig>,
             timeoutMs: Int = 1200
@@ -680,8 +617,6 @@ class WireGuardExitTunnel(
                             ping = System.currentTimeMillis() - start
                         }
                     } catch (_: Exception) {
-                        // WireGuard ports are UDP, socket connect may throw connection refused or timeout.
-                        // If it responds or ICMP unreachable occurs within timeout, endpoint is alive.
                         val elapsed = System.currentTimeMillis() - start
                         if (elapsed in 10..timeoutMs) {
                             ping = elapsed
@@ -702,9 +637,6 @@ class WireGuardExitTunnel(
             }
         }
 
-        /**
-         * Selects the fastest healthy profile from a list by checking latency.
-         */
         fun selectFastestProfile(
             profiles: List<CustomWireGuardConfig>,
             fallback: CustomWireGuardConfig
