@@ -94,8 +94,9 @@ class WireGuardExitTunnel(
             cFile.writeText(cfgJson)
             configFile = cFile
 
+            val detourDesc = if (primarySocksPort > 0) "Aether Upstream (127.0.0.1:$primarySocksPort)" else if (warpIdentity != null) "Cloudflare WARP (WG)" else "Direct"
             LogRepository.i(
-                "[WgExit] Launching userspace WireGuard engine (Server: $endpointHost:$endpointPort, Detour: ${if (warpIdentity != null) "Cloudflare WARP (WG)" else "Direct"}, Port: $localListenPort)...",
+                "[WgExit] Launching userspace WireGuard engine (Server: $endpointHost:$endpointPort, Detour: $detourDesc, Port: $localListenPort)...",
                 "WgExit"
             )
 
@@ -305,11 +306,24 @@ class WireGuardExitTunnel(
             localAddresses.add("\"$safeV6\"")
         }
 
-        val hasWarp = warpIdentity != null
-        val innerDetour = if (hasWarp) "outer-warp" else "direct"
+        val hasUpstreamSocks = primarySocksPort > 0
+        val innerDetour = if (hasUpstreamSocks) "aether-upstream" else if (warpIdentity != null) "outer-warp" else "direct"
 
-        val warpOutbound = if (hasWarp) {
-            val warp = warpIdentity!!
+        val upstreamOutbound = if (hasUpstreamSocks) {
+            """
+            {
+              "type": "socks",
+              "tag": "aether-upstream",
+              "server": "$primarySocksHost",
+              "server_port": $primarySocksPort
+            },
+            """.trimIndent()
+        } else {
+            ""
+        }
+
+        val warpOutbound = if (!hasUpstreamSocks && warpIdentity != null) {
+            val warp = warpIdentity
             """
             {
               "type": "wireguard",
@@ -354,6 +368,7 @@ class WireGuardExitTunnel(
               "mtu": $mtu,
               "detour": "$innerDetour"
             },
+            $upstreamOutbound
             $warpOutbound
             {
               "type": "direct",

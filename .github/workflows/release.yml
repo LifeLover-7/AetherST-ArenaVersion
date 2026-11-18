@@ -66,6 +66,10 @@ jobs:
             echo "==> Permanent keystore already exists. Using existing key."
           fi
 
+      - name: Strip native binaries to minimize APK size
+        run: |
+          find app/src/main/jniLibs -name "*.so" -exec strip --strip-unneeded {} + 2>/dev/null || true
+
       - name: Build Android Release APK
         run: |
           ./gradlew assembleRelease --no-daemon

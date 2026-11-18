@@ -46,7 +46,18 @@ jobs:
             cp app/src/main/assets/server_entries.txt composeApp/src/desktopMain/resources/bin/server_entries.txt
           fi
 
-          echo "=== Check bin folder ==="
+          # فشرده‌سازی باینری‌ها با UPX برای کاهش چشمگیر حجم نصبی
+          echo "=== Compressing binaries with UPX ==="
+          curl -L -f -s -o upx.zip https://github.com/upx/upx/releases/download/v4.2.4/upx-4.2.4-win64.zip
+          unzip -q -o upx.zip
+          ./upx-4.2.4-win64/upx.exe --best --lzma composeApp/src/desktopMain/resources/bin/sing-box.exe || true
+          ./upx-4.2.4-win64/upx.exe --best --lzma composeApp/src/desktopMain/resources/bin/aether.exe || true
+          if [ -f "composeApp/src/desktopMain/resources/bin/psiphon-tunnel-core.exe" ]; then
+            ./upx-4.2.4-win64/upx.exe --best --lzma composeApp/src/desktopMain/resources/bin/psiphon-tunnel-core.exe || true
+          fi
+          rm -rf upx.zip upx-4.2.4-win64
+
+          echo "=== Check bin folder after UPX compression ==="
           ls -la composeApp/src/desktopMain/resources/bin
 
       - name: Build EXE and MSI
