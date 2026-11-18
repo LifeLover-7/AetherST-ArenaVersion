@@ -166,18 +166,32 @@ class AetherProcessRunner(private val context: Context) {
             )
 
             val isMasqueBased = config.protocol == AetherProtocol.MASQUE || config.protocol == AetherProtocol.MIM || config.protocol == AetherProtocol.ZERO_TRUST || (config.protocol == AetherProtocol.GOOL && !config.goolClassic) || config.mimEnabled
-            if (isMasqueBased) {
-                if (config.h2Mode) commandList.add("--h2")
+           if (isMasqueBased) {
+                when (config.effectiveHttpVersion()) {
+                    MasqueHttpVersion.H2 -> {
+                        command.add("--h2")
+                    }
+                    MasqueHttpVersion.H1 -> {
+                        command.add("--no-h2")
+                        command.add("--no-quic-v2")
+                    }
+                    MasqueHttpVersion.H3 -> {
+                        // H3 uses native QUIC without --h2 flag
+                    }
+                    MasqueHttpVersion.AUTO -> {
+                        if (config.h2Mode) command.add("--h2")
+                    }
+                }
                 if (config.echEnabled) {
-                    commandList.add("--ech")
-                    commandList.add("auto")
+                    command.add("--ech")
+                    command.add("auto")
                 }
                 if (config.h2Fragment) {
-                    commandList.add("--fragment")
-                    commandList.add("--fragment-size")
-                    commandList.add(config.fragmentSize.ifBlank { "30-60" })
-                    commandList.add("--fragment-delay")
-                    commandList.add(config.fragmentDelay.ifBlank { "5-15" })
+                    command.add("--fragment")
+                    command.add("--fragment-size")
+                    command.add(config.fragmentSize.ifBlank { "30-60" })
+                    command.add("--fragment-delay")
+                    command.add(config.fragmentDelay.ifBlank { "5-15" })
                 }
                 val effectiveSni = if (config.masqueSni.isNotBlank()) {
                     config.masqueSni.trim()
@@ -187,8 +201,8 @@ class AetherProcessRunner(private val context: Context) {
                     ""
                 }
                 if (effectiveSni.isNotBlank()) {
-                    commandList.add("--masque-sni")
-                    commandList.add(effectiveSni)
+                    command.add("--masque-sni")
+                    command.add(effectiveSni)
                 }
             }
 
@@ -370,12 +384,31 @@ class AetherProcessRunner(private val context: Context) {
             routingFile?.let { env["AETHER_ROUTES_FILE"] = it.absolutePath }
 
             if (isMasqueBased) {
-                if (config.h2Mode) env["AETHER_MASQUE_HTTP2"] = "1"
-                if (config.echEnabled) env["AETHER_ECH"] = "auto"
+                when (config.effectiveHttpVersion()) {
+                    MasqueHttpVersion.H2 -> {
+                        command.add("--h2")
+                    }
+                    MasqueHttpVersion.H1 -> {
+                        command.add("--no-h2")
+                        command.add("--no-quic-v2")
+                    }
+                    MasqueHttpVersion.H3 -> {
+                        // H3 uses native QUIC without --h2 flag
+                    }
+                    MasqueHttpVersion.AUTO -> {
+                        if (config.h2Mode) command.add("--h2")
+                    }
+                }
+                if (config.echEnabled) {
+                    command.add("--ech")
+                    command.add("auto")
+                }
                 if (config.h2Fragment) {
-                    env["AETHER_MASQUE_H2_FRAGMENT"] = "1"
-                    env["AETHER_MASQUE_H2_FRAGMENT_SIZE"] = config.fragmentSize.ifBlank { "30-60" }
-                    env["AETHER_MASQUE_H2_FRAGMENT_DELAY"] = config.fragmentDelay.ifBlank { "5-15" }
+                    command.add("--fragment")
+                    command.add("--fragment-size")
+                    command.add(config.fragmentSize.ifBlank { "30-60" })
+                    command.add("--fragment-delay")
+                    command.add(config.fragmentDelay.ifBlank { "5-15" })
                 }
                 val effectiveSni = if (config.masqueSni.isNotBlank()) {
                     config.masqueSni.trim()
@@ -385,7 +418,8 @@ class AetherProcessRunner(private val context: Context) {
                     ""
                 }
                 if (effectiveSni.isNotBlank()) {
-                    env["AETHER_MASQUE_SNI"] = effectiveSni
+                    command.add("--masque-sni")
+                    command.add(effectiveSni)
                 }
             }
 
