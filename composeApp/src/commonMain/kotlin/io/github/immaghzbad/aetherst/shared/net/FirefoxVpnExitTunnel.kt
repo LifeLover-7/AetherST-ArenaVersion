@@ -1030,17 +1030,160 @@ class FirefoxVpnExitTunnel(
          * (`vpn-serverlist` collection), falling back to official Fastly MASQUE/CONNECT aggregate hostnames
          * (`<cc>.m1.fastly-masque.net:443`).
          */
+        data class FirefoxServerOption(
+            val id: String,
+            val countryCode: String,
+            val titleFa: String,
+            val titleEn: String,
+            val subtitle: String
+        )
+
+        val BUILTIN_SERVER_OPTIONS: List<FirefoxServerOption> = listOf(
+            FirefoxServerOption("us", "US", "آمریکا (اتوماتیک سریع‌ترین سرور)", "United States (Auto Best)", "us.m1.fastly-masque.net:443"),
+            FirefoxServerOption("de", "DE", "آلمان (فرانکفورت / برلین)", "Germany (Frankfurt / Berlin)", "de.m1.fastly-masque.net:443"),
+            FirefoxServerOption("nl", "NL", "هلند (آمستردام)", "Netherlands (Amsterdam)", "nl.m1.fastly-masque.net:443"),
+            FirefoxServerOption("gb", "GB", "بریتانیا (لندن / منچستر)", "United Kingdom (London)", "gb.m1.fastly-masque.net:443"),
+            FirefoxServerOption("fr", "FR", "فرانسه (پاریس / مارسی)", "France (Paris)", "fr.m1.fastly-masque.net:443"),
+            FirefoxServerOption("ch", "CH", "سوئیس (زوریخ)", "Switzerland (Zurich)", "ch.m1.fastly-masque.net:443"),
+            FirefoxServerOption("se", "SE", "سوئد (استکهلم / مالمو)", "Sweden (Stockholm)", "se.m1.fastly-masque.net:443"),
+            FirefoxServerOption("fi", "FI", "فنلاند (هلسینکی)", "Finland (Helsinki)", "fi.m1.fastly-masque.net:443"),
+            FirefoxServerOption("ca", "CA", "کانادا (تورنتو / مونترال / ونکوور)", "Canada (Toronto / Vancouver)", "ca.m1.fastly-masque.net:443"),
+            FirefoxServerOption("at", "AT", "اتریش (وین)", "Austria (Vienna)", "at.m1.fastly-masque.net:443"),
+            FirefoxServerOption("es", "ES", "اسپانیا (مادرید)", "Spain (Madrid)", "es.m1.fastly-masque.net:443"),
+            FirefoxServerOption("it", "IT", "ایتالیا (میلان / رم)", "Italy (Milan / Rome)", "it.m1.fastly-masque.net:443"),
+            FirefoxServerOption("jp", "JP", "ژاپن (توکیو / اوزاکا)", "Japan (Tokyo / Osaka)", "jp.m1.fastly-masque.net:443"),
+            FirefoxServerOption("sg", "SG", "سنگاپور (سنگاپور)", "Singapore", "sg.m1.fastly-masque.net:443"),
+            FirefoxServerOption("au", "AU", "استرالیا (سیدنی / ملبورن)", "Australia (Sydney)", "au.m1.fastly-masque.net:443"),
+            FirefoxServerOption("be", "BE", "بلژیک (بروکسل)", "Belgium (Brussels)", "be.m1.fastly-masque.net:443"),
+            FirefoxServerOption("dk", "DK", "دانمارک (کپنهاگ)", "Denmark (Copenhagen)", "dk.m1.fastly-masque.net:443"),
+            FirefoxServerOption("ie", "IE", "ایرلند (دوبلین)", "Ireland (Dublin)", "ie.m1.fastly-masque.net:443"),
+            FirefoxServerOption("no", "NO", "نروژ (اسلو)", "Norway (Oslo)", "no.m1.fastly-masque.net:443"),
+            FirefoxServerOption("pl", "PL", "لهستان (ورشو)", "Poland (Warsaw)", "pl.m1.fastly-masque.net:443"),
+            FirefoxServerOption("pt", "PT", "پرتغال (لیسبون)", "Portugal (Lisbon)", "pt.m1.fastly-masque.net:443"),
+            FirefoxServerOption("cz", "CZ", "جمهوری چک (پراگ)", "Czechia (Prague)", "cz.m1.fastly-masque.net:443"),
+            FirefoxServerOption("ro", "RO", "رومانی (بخارست)", "Romania (Bucharest)", "ro.m1.fastly-masque.net:443"),
+            FirefoxServerOption("bg", "BG", "بلغارستان (صوفیه)", "Bulgaria (Sofia)", "bg.m1.fastly-masque.net:443"),
+            FirefoxServerOption("hu", "HU", "مجارستان (بوداپست)", "Hungary (Budapest)", "hu.m1.fastly-masque.net:443")
+        )
+
+        fun extractCountryCode(rawSpec: String): String {
+            val trimmed = rawSpec.trim()
+            if (trimmed.isEmpty()) return "US"
+            if (trimmed.contains("|")) {
+                val cc = trimmed.substringBefore("|").trim().uppercase()
+                if (cc.length == 2) return if (cc == "UK") "GB" else cc
+            }
+            if (trimmed.contains(".")) {
+                val prefix = trimmed.substringBefore(".").trim().uppercase()
+                if (prefix.length == 2) return if (prefix == "UK") "GB" else prefix
+            }
+            val code = trimmed.take(2).uppercase()
+            return if (code == "UK") "GB" else code
+        }
+
+        suspend fun fetchLiveServerOptions(
+            socksHost: String = "127.0.0.1",
+            socksPort: Int = 2021
+        ): List<FirefoxServerOption> = withContext(Dispatchers.IO) {
+            val combined = mutableListOf<FirefoxServerOption>()
+            combined.addAll(BUILTIN_SERVER_OPTIONS)
+
+            val live = runCatching {
+                val client = buildClient(socksHost, socksPort, timeoutSec = 10)
+                val req = Request.Builder()
+                    .url(REMOTE_SETTINGS_URL)
+                    .header("User-Agent", MOZILLA_VPN_UA)
+                    .header("Accept", "application/json")
+                    .get()
+                    .build()
+                client.newCall(req).execute().use { resp ->
+                    if (!resp.isSuccessful) return@runCatching emptyList<FirefoxServerOption>()
+                    val body = resp.body?.string() ?: return@runCatching emptyList<FirefoxServerOption>()
+                    val root = jsonParser.parseToJsonElement(body).jsonObject
+                    val dataArr = root["data"]?.jsonArray ?: return@runCatching emptyList<FirefoxServerOption>()
+                    val discovered = mutableListOf<FirefoxServerOption>()
+                    for (recElem in dataArr) {
+                        val rec = recElem.jsonObject
+                        val code = (rec["code"]?.jsonPrimitive?.content ?: rec["country"]?.jsonPrimitive?.content ?: "US").uppercase()
+                        val countryName = rec["name"]?.jsonPrimitive?.content ?: code
+                        val cities = rec["cities"]?.jsonArray ?: continue
+                        for (cityElem in cities) {
+                            val cityObj = cityElem.jsonObject
+                            val cityName = cityObj["name"]?.jsonPrimitive?.content ?: cityObj["code"]?.jsonPrimitive?.content ?: ""
+                            val servers = cityObj["servers"]?.jsonArray ?: continue
+                            for (srvElem in servers) {
+                                val srv = srvElem.jsonObject
+                                if (srv["quarantined"]?.jsonPrimitive?.booleanOrNull == true) continue
+                                val srvName = srv["hostname"]?.jsonPrimitive?.content ?: srv["name"]?.jsonPrimitive?.content ?: ""
+                                val protocols = srv["protocols"]?.jsonArray
+                                var connectHost: String? = null
+                                var connectPort = 443
+                                if (protocols != null) {
+                                    for (pElem in protocols) {
+                                        val pObj = pElem.jsonObject
+                                        if (pObj["name"]?.jsonPrimitive?.content?.lowercase() == "connect") {
+                                            connectHost = pObj["host"]?.jsonPrimitive?.content?.trim()
+                                            connectPort = pObj["port"]?.jsonPrimitive?.intOrNull ?: 443
+                                            if (!connectHost.isNullOrBlank()) break
+                                        }
+                                    }
+                                }
+                                if (connectHost.isNullOrBlank()) {
+                                    val fallbackH = (srv["host"]?.jsonPrimitive?.content ?: srv["hostname"]?.jsonPrimitive?.content)?.trim()
+                                    if (!fallbackH.isNullOrBlank() && fallbackH.contains(".")) {
+                                        connectHost = fallbackH
+                                        connectPort = srv["port"]?.jsonPrimitive?.intOrNull ?: 443
+                                    }
+                                }
+                                if (!connectHost.isNullOrBlank()) {
+                                    val id = "${code.lowercase()}|$connectHost:$connectPort"
+                                    val cityLabel = if (cityName.isNotBlank()) "$countryName - $cityName" else countryName
+                                    val shortHost = srvName.ifBlank { connectHost.substringBefore(".") }
+                                    discovered.add(
+                                        FirefoxServerOption(
+                                            id = id,
+                                            countryCode = code,
+                                            titleFa = "$cityLabel ($shortHost)",
+                                            titleEn = "$cityLabel ($shortHost)",
+                                            subtitle = "$connectHost:$connectPort"
+                                        )
+                                    )
+                                }
+                            }
+                        }
+                    }
+                    discovered
+                }
+            }.getOrDefault(emptyList())
+
+            combined.addAll(live)
+            combined.distinctBy { it.id.lowercase() }
+        }
+
         fun resolveCountryExitCandidates(
             countryCode: String,
             socksHost: String,
             socksPort: Int
         ): List<EdgeEndpoint> {
             val results = mutableListOf<EdgeEndpoint>()
-            val rawCc = countryCode.trim().uppercase()
+            val trimmedSpec = countryCode.trim()
+            val explicitHostPort = when {
+                trimmedSpec.contains("|") -> trimmedSpec.substringAfter("|").trim()
+                trimmedSpec.contains(".") -> trimmedSpec
+                else -> null
+            }
+            val rawCc = extractCountryCode(trimmedSpec)
             val targetCc = when {
                 rawCc.isBlank() || rawCc == "AUTO" -> "US"
                 rawCc == "UK" -> "GB"
                 else -> rawCc
+            }
+            if (!explicitHostPort.isNullOrBlank()) {
+                val h = explicitHostPort.substringBefore(":").trim()
+                val pt = explicitHostPort.substringAfter(":", "443").toIntOrNull() ?: 443
+                if (h.isNotBlank()) {
+                    results.add(EdgeEndpoint(h, pt, targetCc))
+                }
             }
 
             val fetched = runCatching {
@@ -1172,13 +1315,15 @@ class FirefoxVpnExitTunnel(
 
             val client = buildClient(socksHost, socksPort, timeoutSec = 15)
 
-            if (!oauthAccessToken.isNullOrBlank()) {
-                val jwt = runCatching { requestGuardianProxyPass(client, oauthAccessToken!!) }.getOrNull()
+            val currentOAuth = oauthAccessToken
+            if (!currentOAuth.isNullOrBlank()) {
+                val jwt = runCatching { requestGuardianProxyPass(client, currentOAuth) }.getOrNull()
                 if (!jwt.isNullOrBlank()) return jwt
             }
 
-            if (!sessionTokenHex.isNullOrBlank()) {
-                val mintedOAuth = runCatching { exchangeSessionTokenForOAuth(client, sessionTokenHex!!) }.getOrNull()
+            val currentSession = sessionTokenHex
+            if (!currentSession.isNullOrBlank()) {
+                val mintedOAuth = runCatching { exchangeSessionTokenForOAuth(client, currentSession) }.getOrNull()
                 if (!mintedOAuth.isNullOrBlank()) {
                     val jwt = runCatching { requestGuardianProxyPass(client, mintedOAuth) }.getOrNull()
                     if (!jwt.isNullOrBlank()) return jwt
@@ -1233,27 +1378,29 @@ class FirefoxVpnExitTunnel(
 
                 val client = buildClient(socksHost, socksPort, timeoutSec = 15)
 
-                if (oauthAccessToken.isNullOrBlank() && !sessionTokenHex.isNullOrBlank()) {
-                    oauthAccessToken = runCatching { exchangeSessionTokenForOAuth(client, sessionTokenHex!!) }.getOrNull()
+                val sessHex = sessionTokenHex
+                if (oauthAccessToken.isNullOrBlank() && !sessHex.isNullOrBlank()) {
+                    oauthAccessToken = runCatching { exchangeSessionTokenForOAuth(client, sessHex) }.getOrNull()
                 }
 
-                val proxyPassJwt = if (!oauthAccessToken.isNullOrBlank()) {
-                    runCatching { requestGuardianProxyPass(client, oauthAccessToken!!) }.getOrNull()
+                val oauthTok = oauthAccessToken
+                val proxyPassJwt = if (!oauthTok.isNullOrBlank()) {
+                    runCatching { requestGuardianProxyPass(client, oauthTok) }.getOrNull()
                 } else null
 
                 // Always preserve sessionTokenHex if available so FirefoxVpnExitTunnel.start() can mint/renew
                 // 10-minute Guardian ProxyPass JWTs through Aether Layer-1 on every Connect!
                 when {
-                    !sessionTokenHex.isNullOrBlank() && !proxyPassJwt.isNullOrBlank() ->
-                        "fxa:$sessionTokenHex:${oauthAccessToken.orEmpty()}:$proxyPassJwt"
-                    !sessionTokenHex.isNullOrBlank() && !oauthAccessToken.isNullOrBlank() ->
-                        "fxa:$sessionTokenHex:$oauthAccessToken"
-                    !sessionTokenHex.isNullOrBlank() ->
-                        sessionTokenHex!!
+                    !sessHex.isNullOrBlank() && !proxyPassJwt.isNullOrBlank() ->
+                        "fxa:$sessHex:${oauthTok.orEmpty()}:$proxyPassJwt"
+                    !sessHex.isNullOrBlank() && !oauthTok.isNullOrBlank() ->
+                        "fxa:$sessHex:$oauthTok"
+                    !sessHex.isNullOrBlank() ->
+                        sessHex
                     !proxyPassJwt.isNullOrBlank() ->
                         proxyPassJwt
-                    !oauthAccessToken.isNullOrBlank() ->
-                        oauthAccessToken!!
+                    !oauthTok.isNullOrBlank() ->
+                        oauthTok
                     else ->
                         throw IllegalStateException("Could not extract valid sessionToken or ProxyPass from Firefox login")
                 }

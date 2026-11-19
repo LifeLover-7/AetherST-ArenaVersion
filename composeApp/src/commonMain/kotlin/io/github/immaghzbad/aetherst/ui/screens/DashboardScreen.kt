@@ -1417,14 +1417,7 @@ fun ExitNodeCard(
                             modifier = Modifier.size(16.dp)
                         )
                     }
-                    Spacer(modifier = Modifier.height(4.dp))
-                    Text(
-                        text = strings.EXIT_NODE_WG_UDP_ADVISORY,
-                        color = Color(0xFFF59E0B),
-                        fontSize = (9.5 * scaleFactor).sp,
-                        lineHeight = (13 * scaleFactor).sp,
-                        modifier = Modifier.padding(horizontal = 4.dp)
-                    )
+
                 }
                 ExitNodeMode.CUSTOM_SOCKS5 -> {
                     val socksTarget = if (config.customSocks5Host.isNotBlank()) "${config.customSocks5Host}:${config.customSocks5Port}" else null
@@ -1462,7 +1455,18 @@ fun ExitNodeCard(
                     }
                 }
                 ExitNodeMode.FIREFOX_VPN -> {
-                    val ffTarget = if (config.firefoxVpnToken.isNotBlank()) "${config.firefoxVpnCountry.uppercase()} :${config.firefoxVpnPort}" else null
+                    val rawCountrySpec = config.firefoxVpnCountry.trim().ifBlank { "de" }
+                    val ffCc = when {
+                        rawCountrySpec.contains("|") -> rawCountrySpec.substringBefore("|").trim().uppercase()
+                        rawCountrySpec.contains(".") -> rawCountrySpec.substringBefore(".").trim().uppercase()
+                        else -> rawCountrySpec.take(2).uppercase()
+                    }.let { if (it == "UK") "GB" else it }
+                    val ffHostLabel = if (rawCountrySpec.contains("|")) {
+                        "${CountryNames.label(ffCc)} • ${rawCountrySpec.substringAfter("|").substringBefore(":")}"
+                    } else {
+                        CountryNames.label(ffCc)
+                    }
+                    val ffTarget = if (config.firefoxVpnToken.isNotBlank()) "$ffHostLabel (:${config.firefoxVpnPort})" else null
                     Row(
                         modifier = Modifier
                             .fillMaxWidth()
@@ -1474,19 +1478,23 @@ fun ExitNodeCard(
                         verticalAlignment = Alignment.CenterVertically,
                         horizontalArrangement = Arrangement.SpaceBetween
                     ) {
-                        Column(modifier = Modifier.weight(1f)) {
-                            Text(
-                                text = strings.EXIT_NODE_FIREFOX_VPN,
-                                fontWeight = FontWeight.SemiBold,
-                                color = Color.White,
-                                fontSize = (11 * scaleFactor).sp
-                            )
-                            Text(
-                                text = ffTarget ?: strings.EXIT_NODE_CONFIGURE,
-                                color = if (ffTarget != null) Color(0xFFFF944D) else IosActiveBlue,
-                                fontSize = (10 * scaleFactor).sp,
-                                maxLines = 1
-                            )
+                        Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.weight(1f)) {
+                            CountryFlag(countryCode = ffCc, size = (20 * scaleFactor).dp)
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Column {
+                                Text(
+                                    text = strings.EXIT_NODE_FIREFOX_VPN,
+                                    fontWeight = FontWeight.SemiBold,
+                                    color = Color.White,
+                                    fontSize = (11 * scaleFactor).sp
+                                )
+                                Text(
+                                    text = ffTarget ?: strings.EXIT_NODE_CONFIGURE,
+                                    color = if (ffTarget != null) Color(0xFFFF944D) else IosActiveBlue,
+                                    fontSize = (10 * scaleFactor).sp,
+                                    maxLines = 1
+                                )
+                            }
                         }
                         Icon(
                             Icons.Default.Edit,

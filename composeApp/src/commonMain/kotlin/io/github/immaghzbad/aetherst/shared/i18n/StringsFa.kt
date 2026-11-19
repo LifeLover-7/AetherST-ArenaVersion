@@ -837,7 +837,7 @@ object StringsFa : AppStrings {
     override val EXIT_NODE_PSIPHON_POOL_DESC = "اجرای موازی ۳ الی ۴ هسته سایفون با پروتکل OSSH و توازن بار"
     override val EXIT_NODE_CUSTOM_WG = "وایرگارد ثانویه دستی"
     override val EXIT_NODE_CUSTOM_WG_DESC = "مسیریابی تو در تو روی کانفیگ وایرگارد اختصاصی (Proton و...)"
-    override val EXIT_NODE_WG_UDP_ADVISORY = "پروتکل وایرگارد بر بستر UDP است و پورت‌های آن در ایران مسدود می‌باشد. برای تغییر آی‌پی به کشور دلخواه و استفاده از هوش مصنوعی، لطفاً اکسیت‌نود سایفون (با انتخاب کشور هلند/آلمان) یا ساکس ۵ را انتخاب کنید."
+    override val EXIT_NODE_WG_UDP_ADVISORY = ""
     override val EXIT_NODE_CUSTOM_SOCKS5 = "پروکسی SOCKS5 دستی"
     override val EXIT_NODE_CUSTOM_SOCKS5_DESC = "هدایت ترافیک از درون تانل به سرور SOCKS5 خارجی"
     override val EXIT_NODE_CONFIGURE = "تنظیم و پیکربندی"

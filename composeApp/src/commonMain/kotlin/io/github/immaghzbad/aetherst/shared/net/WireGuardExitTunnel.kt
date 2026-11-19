@@ -579,9 +579,9 @@ class WireGuardExitTunnel(
     ): WarpIdentity? {
         val searchDirs = listOf(
             workDir,
-            File(System.getProperty("user.home", "."), ".aether"),
+            File(System.getProperty("user.home") ?: ".", ".aether"),
             File(System.getenv("AppData") ?: ".", "AetherST-Tunnel/bin"),
-            File(System.getProperty("user.dir", ".")),
+            File(System.getProperty("user.dir") ?: "."),
             File(".")
         )
         val fileNames = listOf("aether.toml", "aether-wg.toml", "aether-masque.toml")
@@ -890,7 +890,7 @@ class WireGuardExitTunnel(
     }
 
     private fun killStaleSingBoxProcess(port: Int) {
-        val isWin = System.getProperty("os.name", "").lowercase().contains("win")
+        val isWin = (System.getProperty("os.name") ?: "").lowercase().contains("win")
         runCatching {
             if (isWin) {
                 ProcessBuilder("cmd", "/c", "for /f \"tokens=5\" %a in ('netstat -aon ^| findstr :$port') do taskkill /F /PID %a")
@@ -903,7 +903,7 @@ class WireGuardExitTunnel(
     }
 
     private fun findSingBoxBinary(): String? {
-        val binName = if (System.getProperty("os.name", "").lowercase().contains("win")) "sing-box.exe" else "sing-box"
+        val binName = if ((System.getProperty("os.name") ?: "").lowercase().contains("win")) "sing-box.exe" else "sing-box"
         val candidates = listOf(
             File("composeApp/src/desktopMain/resources/bin", binName),
             File("bin", binName),
