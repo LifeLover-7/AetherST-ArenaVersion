@@ -140,7 +140,11 @@ class ConnectionController private constructor(context: Context) : ConnectionCon
         }
         try {
             clearLastconn()
-
+                if (!hasPhysicalInternet()) {
+                LogRepository.e("[Controller] No physical internet connection detected. Aborting fake start.")
+                notifyStatusChanged(appContext, ConnectionStatus.ERROR)
+                return
+            }
             val config = AetherConfigRepository.getInstance(getSettings(PlatformContext(appContext))).config.value.effectiveZeroTrustConfig()
             var effectiveConfig = config
 
@@ -1378,6 +1382,19 @@ class ConnectionController private constructor(context: Context) : ConnectionCon
                     true
                 }
             }.getOrDefault(false)
+        }
+    }
+    private fun hasPhysicalInternet(): Boolean {
+        return try {
+            val cm = appContext.getSystemService(Context.CONNECTIVITY_SERVICE) as android.net.ConnectivityManager
+            val net = cm.activeNetwork ?: return false
+            val caps = cm.getNetworkCapabilities(net) ?: return false
+            caps.hasCapability(android.net.NetworkCapabilities.NET_CAPABILITY_INTERNET) &&
+                (caps.hasTransport(android.net.NetworkCapabilities.TRANSPORT_WIFI) ||
+                 caps.hasTransport(android.net.NetworkCapabilities.TRANSPORT_CELLULAR) ||
+                 caps.hasTransport(android.net.NetworkCapabilities.TRANSPORT_ETHERNET))
+        } catch (_: Exception) {
+            false
         }
     }
 
