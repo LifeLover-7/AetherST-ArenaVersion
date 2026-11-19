@@ -138,6 +138,7 @@ class AetherVpnService : VpnService() {
 
     override fun onCreate() {
         super.onCreate()
+        showInitialNotification()
         LogRepository.initialize(getSettings(PlatformContext(this)))
         PsiphonController.setVpnService(this)
         TorController.setVpnService(this)
@@ -294,32 +295,32 @@ class AetherVpnService : VpnService() {
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        showInitialNotification()
         when (intent?.action) {
             ACTION_START -> {
                 isUserInitiatedStop = false
                 autoReconnectJob?.cancel()
                 autoReconnectJob = null
-                showInitialNotification()
                 startAttempt(commandCounter.incrementAndGet())
             }
             ACTION_RESTART -> {
                 isUserInitiatedStop = false
-                showInitialNotification()
                 restartTunnel(commandCounter.incrementAndGet())
             }
             ACTION_STOP -> {
                 isUserInitiatedStop = true
-                showInitialNotification()
                 stopVpnService(commandCounter.incrementAndGet())
             }
             ACTION_SWITCH_HEV -> {
-                showInitialNotification()
                 val host = intent.getStringExtra("host") ?: "127.0.0.1"
                 val port = intent.getIntExtra("port", 3080)
                 scope.launch { switchHevInternal(host, port) }
             }
             else -> {
-                if (isUserInitiatedStop) stopSelf()
+                if (isUserInitiatedStop) {
+                    stopForeground(STOP_FOREGROUND_REMOVE)
+                    stopSelf()
+                }
             }
         }
         return START_NOT_STICKY
