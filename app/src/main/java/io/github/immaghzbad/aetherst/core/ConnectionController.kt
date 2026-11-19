@@ -1018,7 +1018,24 @@ class ConnectionController private constructor(context: Context) : ConnectionCon
                 notifyStatusChanged(appContext, ConnectionStatus.STARTING)
             }
 
-            if (!startAetherValidated(config, bindAddress, attemptId)) {
+            var validatedOk = try {
+                startAetherValidated(config, bindAddress, attemptId)
+            } catch (e: Exception) {
+                if (config.protocol == AetherProtocol.GOOL && !config.goolClassic) {
+                    LogRepository.w("[GOOL] MASQUE-based GOOL failed (${e.message}); falling back to Classic GOOL (WireGuard-in-WireGuard)...")
+                    false
+                } else {
+                    throw e
+                }
+            }
+            if (!validatedOk && config.protocol == AetherProtocol.GOOL && !config.goolClassic) {
+                runner.stop()
+                delay(500.milliseconds)
+                if (activeAttemptId.get() != attemptId) return false
+                notifyStatusChanged(appContext, ConnectionStatus.STARTING)
+                validatedOk = startAetherValidated(config.copy(goolClassic = true), bindAddress, attemptId)
+            }
+            if (!validatedOk) {
                 return false
             }
             if (activeAttemptId.get() != attemptId) return false

@@ -39,7 +39,8 @@ object LastMimHops {
 
 private val MimOuterRegex = Regex("""selected\s+MASQUE\s+gateway\s+(\S+)""", RegexOption.IGNORE_CASE)
 private val MimReadyRegex = Regex("""masque-in-masque\s+ready:?\s*(\S+)\s*\(outer\)\s+and\s+(\S+)\s*\(inner\)""", RegexOption.IGNORE_CASE)
-private val ExitDetailRegex = Regex("""(?i)\b(?:gool|masque|wireguard|wg|mim)\s+exit:\s*([0-9a-fA-F.:]+),\s*([A-Za-z]{2})(?:\s+via\s+([A-Za-z0-9]+))?""")
+private val ExitDetailRegex = Regex("""(?i)\b(?:gool|warp-in-warp|masque-in-masque|masque|wireguard|wg|mim)\s+exit:\s*([0-9a-fA-F.:]+),\s*([A-Za-z]{2})(?:\s+via\s+([A-Za-z0-9]+))?""")
+private val SelectedWgEndpointRegex = Regex("""(?i)(?:selected\s+wireguard\s+(?:endpoint|gateway)(?:\s*\(outer\))?|establishing\s+outer\s+warp\s+tunnel\s+to)\s+([0-9]{1,3}(?:\.[0-9]{1,3}){3}:[0-9]{2,5})""")
 
 class AetherProcessRunner(private val context: Context) {
 
@@ -136,7 +137,7 @@ class AetherProcessRunner(private val context: Context) {
             when (config.protocol) {
                 AetherProtocol.MASQUE -> commandList.add("--masque")
                 AetherProtocol.WG -> commandList.add("--wg")
-                AetherProtocol.GOOL -> commandList.add("--gool")
+                AetherProtocol.GOOL -> {} // Added below based on config.goolClassic
                 AetherProtocol.MIM -> commandList.add("--mim")
                 AetherProtocol.ZERO_TRUST -> {}
             }
@@ -564,12 +565,7 @@ class AetherProcessRunner(private val context: Context) {
                         if (currentAttemptId.get() != attemptId) null else throw e
                     } ?: break
 
-                    val effectiveProtocol = if (
-                        config.exitNodeMode == ExitNodeMode.CUSTOM_WG &&
-                        config.customWgConfig.isValid() &&
-                        config.protocol in setOf(AetherProtocol.MASQUE, AetherProtocol.WG, AetherProtocol.GOOL)
-                    ) AetherProtocol.GOOL else config.protocol
-                    parseOutputLine(line, attemptId, effectiveProtocol, config.exitNodeMode, onCodeRequired)
+                    parseOutputLine(line, attemptId, config.protocol, config.exitNodeMode, onCodeRequired)
                 }
             }
 
@@ -627,6 +623,13 @@ class AetherProcessRunner(private val context: Context) {
             return
         }
 
+        SelectedWgEndpointRegex.find(line)?.let { match ->
+            val ep = match.groupValues.getOrNull(1)?.trim() ?: ""
+            if (ep.isNotEmpty() && !ep.startsWith("127.") && !ep.startsWith("0.")) {
+                runCatching { java.io.File(context.filesDir, "aether-active-endpoint.txt").writeText(ep) }
+            }
+        }
+
         ExitDetailRegex.find(line)?.let { match ->
             val ip = match.groupValues.getOrNull(1)?.trim() ?: ""
             val country = match.groupValues.getOrNull(2)?.trim()?.uppercase() ?: ""
@@ -676,14 +679,17 @@ class AetherProcessRunner(private val context: Context) {
         )) || lower.contains("all gateways failed")
 
         when {
-            lower.contains("scanning") -> {
+            lower.contains("scanning") || lower.contains("hunting for") -> {
                 goolOuterValidated = false
                 dataPlaneOk = false
                 quickRetryPending.set(false)
                 SocksGate.setReady(SocksReadiness.NOT_READY)
                 updateState(ConnectionStatus.STARTING, attemptId)
             }
-            lower.contains("validating") -> {
+            lower.contains("validating") || lower.contains("establishing outer") || lower.contains("establishing inner") -> {
+                if (lower.contains("establishing inner") || (lower.contains("inner endpoint") && lower.contains("tunneled through outer"))) {
+                    goolOuterValidated = true
+                }
                 if (_connectionStatus.value == ConnectionStatus.STARTING) updateState(ConnectionStatus.VALIDATING, attemptId)
             }
             lower.contains("tls established") || lower.contains("tls handshake complete") -> {
@@ -693,22 +699,22 @@ class AetherProcessRunner(private val context: Context) {
                 when {
                     lower.contains("gool ready") ||
                     lower.contains("gool exit:") ||
+                    lower.contains("warp-in-warp exit:") ||
                     (lower.contains("inner") && lower.contains("tunnel validated")) ||
+                    (goolOuterValidated && lower.contains("wireguard tunnel validated")) ||
                     lower.contains("wiw ready") ||
                     lower.contains("warp-in-warp ready") ||
-                    lower.contains("serving socks5") -> {
+                    lower.contains("serving socks5") ||
+                    (lower.contains("exit location") && lower.contains("accepted")) -> {
                         quickRetryPending.set(false)
                         dataPlaneOk = true
-                        updateState(ConnectionStatus.DATAPLANE_VALIDATED, attemptId)
-                        updateState(ConnectionStatus.SOCKS_READY, attemptId)
-                    }
-                    lower.contains("socks") && lower.contains("listening") && lower.contains(lastBindAddress) -> {
-                        quickRetryPending.set(false)
-                        dataPlaneOk = true
+                        SocksGate.setReady(SocksReadiness.PROBED_OK)
                         updateState(ConnectionStatus.DATAPLANE_VALIDATED, attemptId)
                         updateState(ConnectionStatus.SOCKS_READY, attemptId)
                     }
                     lower.contains("registering the gool") ||
+                    (lower.contains("inner endpoint") && lower.contains("tunneled through outer")) ||
+                    lower.contains("establishing inner warp tunnel") ||
                     lower.contains("validating wireguard tunnel") ||
                     lower.contains("connect-ip status: 200") ||
                     lower.contains("connect-ip established") ||
@@ -718,12 +724,33 @@ class AetherProcessRunner(private val context: Context) {
                     }
                 }
             }
+            protocol == AetherProtocol.MIM -> {
+                when {
+                    lower.contains("masque-in-masque ready") ||
+                    lower.contains("inner masque tunnel established") ||
+                    lower.contains("masque-in-masque exit:") ||
+                    lower.contains("mim ready") ||
+                    lower.contains("mim exit:") ||
+                    (lower.contains("exit location") && lower.contains("accepted")) -> {
+                        quickRetryPending.set(false)
+                        dataPlaneOk = true
+                        SocksGate.setReady(SocksReadiness.PROBED_OK)
+                        updateState(ConnectionStatus.DATAPLANE_VALIDATED, attemptId)
+                        updateState(ConnectionStatus.SOCKS_READY, attemptId)
+                    }
+                    lower.contains("selected masque gateway") ||
+                    lower.contains("trying inner masque edge") ||
+                    lower.contains("establishing outer masque") -> {
+                        updateState(ConnectionStatus.VALIDATING, attemptId)
+                    }
+                }
+            }
             lower.contains("connect-ip status: 200") || lower.contains("connect-ip established") -> {
                 quickRetryPending.set(false)
                 dataPlaneOk = true
                 updateState(ConnectionStatus.DATAPLANE_VALIDATED, attemptId)
             }
-            (protocol != AetherProtocol.GOOL) && (
+            (protocol != AetherProtocol.GOOL && protocol != AetherProtocol.MIM) && (
                 lower.contains("tunnel validated") ||
                 lower.contains("data-plane verification passed") ||
                 lower.contains("data plane verification passed") ||
@@ -733,9 +760,13 @@ class AetherProcessRunner(private val context: Context) {
             ) -> {
                 quickRetryPending.set(false)
                 dataPlaneOk = true
+                SocksGate.setReady(SocksReadiness.PROBED_OK)
                 updateState(ConnectionStatus.DATAPLANE_VALIDATED, attemptId)
+                if (lower.contains("serving socks5") || lower.contains("exposing socks5")) {
+                    updateState(ConnectionStatus.SOCKS_READY, attemptId)
+                }
             }
-            (protocol != AetherProtocol.GOOL) && lower.contains("socks") && lower.contains("listening") -> {
+            (protocol != AetherProtocol.GOOL && protocol != AetherProtocol.MIM) && lower.contains("socks") && lower.contains("listening") -> {
                 quickRetryPending.set(false)
                 dataPlaneOk = true
                 SocksGate.setReady(SocksReadiness.PROBED_OK)
@@ -853,113 +884,39 @@ class AetherProcessRunner(private val context: Context) {
         command: MutableList<String>,
         env: MutableMap<String, String>
     ) {
+        // Clean up any stale .corrupt or custom-wg-inner files in root workDir so Layer-1 (WG / GOOL / MASQUE)
+        // always uses clean Cloudflare WARP identities without TOML deserialization failure (missing field 'ipv6').
         val innerFiles = listOf(
             java.io.File(workDir, "aether-gool.toml"),
             java.io.File(workDir, "aether-masque-gool.toml"),
             java.io.File(workDir, "aether-secondary.toml"),
             java.io.File(workDir, "aether-wg-secondary.toml")
         )
-        if (config.exitNodeMode != ExitNodeMode.CUSTOM_WG) {
-            for (f in innerFiles) {
-                runCatching {
-                    if (f.exists() && f.readText().contains("custom-wg-inner")) {
+        for (f in innerFiles) {
+            runCatching {
+                val corrupt = java.io.File(workDir, "${f.name}.corrupt")
+                if (corrupt.exists()) corrupt.delete()
+                if (f.exists()) {
+                    val txt = f.readText()
+                    if (txt.contains("custom-wg-inner") || !txt.contains("ipv6")) {
                         f.delete()
                     }
                 }
             }
-            return
         }
-
-        val targetWg = if (config.customWgAutoSelect && config.customWgProfiles.isNotEmpty()) {
-            io.github.immaghzbad.aetherst.shared.net.WireGuardExitTunnel.selectFastestProfile(
-                config.customWgProfiles,
-                config.customWgConfig
-            )
-        } else {
-            config.customWgConfig
-        }
-        if (!targetWg.isValid()) return
-
-        val rawEp = targetWg.endpoint.trim()
-        val epHostRaw = if (rawEp.startsWith("[")) {
-            rawEp.substringAfter('[').substringBefore(']')
-        } else {
-            rawEp.substringBeforeLast(':')
-        }.trim()
-        val epPort = rawEp.substringAfterLast(':', "51820").trim().toIntOrNull() ?: 51820
-        val epHostIp = runCatching {
-            if (epHostRaw.matches(Regex("^\\d{1,3}(\\.\\d{1,3}){3}$")) || epHostRaw.contains(":")) epHostRaw
-            else java.net.InetAddress.getAllByName(epHostRaw).firstOrNull { it.address.size == 4 }?.hostAddress ?: epHostRaw
-        }.getOrDefault(epHostRaw)
-        val resolvedEndpoint = "$epHostIp:$epPort"
-        val cleanIpv4 = targetWg.addressV4.substringBefore('/').trim().ifBlank { "10.2.0.2" }
-
-        // Protect outer Cloudflare WARP identity files from accidental pollution with custom WG private key
+        val customPriv = config.customWgConfig.privateKey.trim()
         for (outerName in listOf("aether.toml", "aether-wg.toml", "aether-masque.toml")) {
             val outerFile = java.io.File(workDir, outerName)
             runCatching {
-                if (outerFile.exists() && outerFile.readText().contains(targetWg.privateKey.trim())) {
-                    outerFile.delete()
+                val corrupt = java.io.File(workDir, "$outerName.corrupt")
+                if (corrupt.exists()) corrupt.delete()
+                if (outerFile.exists()) {
+                    val txt = outerFile.readText()
+                    if ((customPriv.isNotEmpty() && txt.contains(customPriv)) || !txt.contains("ipv6")) {
+                        outerFile.delete()
+                    }
                 }
             }
-        }
-
-        val outerToml = java.io.File(workDir, "aether.toml")
-        val isClassicWg = config.protocol == AetherProtocol.WG || (config.protocol == AetherProtocol.GOOL && config.goolClassic)
-        if (isClassicWg && !outerToml.exists()) {
-            runCatching {
-                LogRepository.i("[AetherCore] Provisioning outer Cloudflare WARP identity (aether.toml) before starting 2-layer WireGuard chain...")
-                ProcessBuilder(binaryPath, "--register", "wg")
-                    .directory(workDir)
-                    .start()
-                    .waitFor(12, java.util.concurrent.TimeUnit.SECONDS)
-            }
-        }
-
-        val innerTomlContent = buildString {
-            appendLine("device_id = \"custom-wg-inner\"")
-            appendLine("access_token = \"custom-wg-token\"")
-            appendLine("ipv4 = \"$cleanIpv4\"")
-            appendLine("wg_private_key = \"${targetWg.privateKey.trim()}\"")
-            appendLine("wg_peer_public_key = \"${targetWg.publicKey.trim()}\"")
-            appendLine("assigned_endpoint = \"$resolvedEndpoint\"")
-            appendLine("client_id = \"AAAA\"")
-        }
-        for (f in innerFiles) {
-            runCatching { f.writeText(innerTomlContent) }
-        }
-
-        if (config.protocol in setOf(AetherProtocol.MASQUE, AetherProtocol.GOOL, AetherProtocol.WG)) {
-            command.removeAll(listOf("--masque", "--wg", "--gool", "--gool-classic"))
-            if (isClassicWg) {
-                command.add("--gool-classic")
-                command.removeAll(listOf("--wiw-inner"))
-                command.add("--wiw-inner")
-                command.add(resolvedEndpoint)
-                env["AETHER_PROTOCOL"] = "gool"
-                env["AETHER_GOOL_MODE"] = "classic"
-                env["AETHER_WIW_INNER_PEER"] = resolvedEndpoint
-                if (outerToml.exists()) {
-                    command.add("--api-address")
-                    command.add("127.0.0.1:1")
-                }
-            } else {
-                command.add("--gool")
-                command.removeAll(listOf("--gool-peer"))
-                command.add("--gool-peer")
-                command.add(resolvedEndpoint)
-                env["AETHER_PROTOCOL"] = "gool"
-                env["AETHER_GOOL_INNER"] = resolvedEndpoint
-            }
-
-            val customDns = targetWg.dnsServers.firstOrNull { it.isNotBlank() } ?: "10.2.0.1"
-            val combinedDns = "$customDns,1.1.1.1,1.0.0.1"
-            if (!command.contains("--dns")) {
-                command.add("--dns")
-                command.add(combinedDns)
-            }
-            env["AETHER_DNS"] = combinedDns
-            LogRepository.i("[AetherCore] Configured native 2-layer WireGuard chain -> Inner Peer: $resolvedEndpoint (IPv4: $cleanIpv4, DNS: $customDns)")
         }
     }
 

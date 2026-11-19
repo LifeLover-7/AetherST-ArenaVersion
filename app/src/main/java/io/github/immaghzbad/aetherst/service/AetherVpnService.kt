@@ -390,6 +390,7 @@ class AetherVpnService : VpnService() {
                     config.tunnelEngine
                 }
                 activeTunnelEngine = effectiveEngine
+                wasEverRunning = false
 
                 // گام ۱: ابتدا هسته و زنجیره (Psiphon/Tor) بدون اختلال تونل مجازی متصل و تایید شوند
                 getController().start()

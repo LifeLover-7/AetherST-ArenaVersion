@@ -75,7 +75,7 @@ class FxaVerificationRequiredException(
  *  2. Data Plane:
  *     - Native Kotlin HTTP/2 (`ALPN h2`) multiplexed `CONNECT` client + HTTP/1.1 `CONNECT` fallback
  *       tunneled over Aether's Layer-1 SOCKS5 proxy (`primarySocksHost:primarySocksPort`).
- *     - Sends `Proxy-Authorization: Bearer <proxy_pass_jwt>` and `User-Agent: MozillaVPN/2.35.0 (sys:linux; iap:true)`.
+ *     - Sends `Proxy-Authorization: ProxyPass <proxy_pass_jwt>` and `User-Agent: MozillaVPN/2.35.0 (sys:linux; iap:true)`.
  *     - Intercepts all DNS queries (both SOCKS5 TCP `:53` and SOCKS5 `UDP ASSOCIATE` `:53`) and resolves
  *       them via in-tunnel DNS-over-HTTPS (`POST https://1.1.1.1/dns-query` over an H2 CONNECT stream to `1.1.1.1:443`)
  *       because Mozilla's Fastly edge permits TCP ports 80 and 443 only.
@@ -453,36 +453,54 @@ class FirefoxVpnExitTunnel(
 
         fun openConnectStream(targetHost: String, targetPort: Int, timeoutMs: Long = 10_000L): H2Stream? {
             if (!isAlive()) return null
-            val streamId = nextStreamId.getAndAdd(2)
-            val stream = H2Stream(streamId, this)
-            streams[streamId] = stream
-
             val authority = if (targetHost.contains(":") && !targetHost.startsWith("[")) {
                 "[$targetHost]:$targetPort"
             } else {
                 "$targetHost:$targetPort"
             }
-            val hpack = encodeConnectHeaders(authority, proxyPassProvider(), MOZILLA_VPN_UA)
 
-            try {
-                synchronized(writeLock) {
-                    val out = rawOut ?: throw IllegalStateException("H2 output closed")
-                    writeFrameLocked(out, type = 0x01, flags = 0x04, streamId = streamId, payload = hpack)
-                    out.flush()
+            for (scheme in listOf("ProxyPass", "Bearer")) {
+                val streamId = nextStreamId.getAndAdd(2)
+                val stream = H2Stream(streamId, this)
+                streams[streamId] = stream
+
+                val tokenVal = proxyPassProvider().trim()
+                val authHeaderVal = if (tokenVal.startsWith("ProxyPass ", ignoreCase = true) || tokenVal.startsWith("Bearer ", ignoreCase = true)) {
+                    tokenVal
+                } else {
+                    "$scheme $tokenVal"
                 }
-            } catch (_: Exception) {
-                streams.remove(streamId)
-                return null
-            }
+                val out = ByteArrayOutputStream(256)
+                writeHpackLiteralHeader(out, ":method", "CONNECT")
+                writeHpackLiteralHeader(out, ":authority", authority)
+                writeHpackLiteralHeader(out, "proxy-authorization", authHeaderVal)
+                writeHpackLiteralHeader(out, "user-agent", MOZILLA_VPN_UA)
+                val hpack = out.toByteArray()
 
-            val status = stream.awaitResponseStatus(timeoutMs)
-            if (status !in 200..299) {
+                try {
+                    synchronized(writeLock) {
+                        val raw = rawOut ?: throw IllegalStateException("H2 output closed")
+                        writeFrameLocked(raw, type = 0x01, flags = 0x04, streamId = streamId, payload = hpack)
+                        raw.flush()
+                    }
+                } catch (_: Exception) {
+                    streams.remove(streamId)
+                    return null
+                }
+
+                val status = stream.awaitResponseStatus(timeoutMs)
+                if (status in 200..299) {
+                    return stream
+                }
                 streams.remove(streamId)
                 sendRstStream(streamId)
-                LogRepository.w("[FirefoxVpn] Edge CONNECT to $authority rejected with HTTP status $status", "FirefoxVpn")
-                return null
+                if (status != 407 && status != 401) {
+                    LogRepository.w("[FirefoxVpn] Edge CONNECT to $authority rejected with HTTP status $status", "FirefoxVpn")
+                    return null
+                }
             }
-            return stream
+            LogRepository.w("[FirefoxVpn] Edge CONNECT to $authority rejected after auth attempts", "FirefoxVpn")
+            return null
         }
 
         fun sendDataFrame(streamId: Int, data: ByteArray, offset: Int, length: Int, endStream: Boolean) {
@@ -944,44 +962,49 @@ class FirefoxVpnExitTunnel(
     }
 
     private fun verifyDataPlane(socksPort: Int): String? {
-        try {
-            Socket().use { socket ->
-                socket.soTimeout = 6000
-                socket.connect(InetSocketAddress("127.0.0.1", socksPort), 2500)
-                val out = socket.getOutputStream()
-                val input = socket.getInputStream()
-                out.write(byteArrayOf(0x05, 0x01, 0x00))
-                out.flush()
-                val authResp = ByteArray(2)
-                readFully(input, authResp)
-                if (authResp[0] == 0x05.toByte() && authResp[1] == 0x00.toByte()) {
-                    val req = byteArrayOf(0x05, 0x01, 0x00, 0x01, 1, 1, 1, 1, 0x00, 0x50)
-                    out.write(req)
+        for ((ipBytes, hostHdr) in listOf(
+            byteArrayOf(1, 1, 1, 1) to "1.1.1.1",
+            byteArrayOf(1, 0, 0, 1) to "1.0.0.1"
+        )) {
+            try {
+                Socket().use { socket ->
+                    socket.soTimeout = 6000
+                    socket.connect(InetSocketAddress("127.0.0.1", socksPort), 2500)
+                    val out = socket.getOutputStream()
+                    val input = socket.getInputStream()
+                    out.write(byteArrayOf(0x05, 0x01, 0x00))
                     out.flush()
-                    val connResp = ByteArray(4)
-                    readFully(input, connResp)
-                    if (connResp[1] == 0x00.toByte()) {
-                        when (connResp[3]) {
-                            0x01.toByte() -> readFully(input, ByteArray(4 + 2))
-                            0x03.toByte() -> {
-                                val len = input.read()
-                                if (len > 0) readFully(input, ByteArray(len + 2))
-                            }
-                            0x04.toByte() -> readFully(input, ByteArray(16 + 2))
-                        }
-                        val httpReq = "GET /cdn-cgi/trace HTTP/1.1\r\nHost: 1.1.1.1\r\nUser-Agent: AetherST/2.5\r\nConnection: close\r\n\r\n"
-                        out.write(httpReq.toByteArray(Charsets.US_ASCII))
+                    val authResp = ByteArray(2)
+                    readFully(input, authResp)
+                    if (authResp[0] == 0x05.toByte() && authResp[1] == 0x00.toByte()) {
+                        val req = byteArrayOf(0x05, 0x01, 0x00, 0x01, ipBytes[0], ipBytes[1], ipBytes[2], ipBytes[3], 0x00, 0x50)
+                        out.write(req)
                         out.flush()
-                        val text = input.bufferedReader(Charsets.US_ASCII).readText()
-                        val ip = Regex("""(?m)^ip=(.+)$""").find(text)?.groupValues?.get(1)?.trim()
-                        val loc = Regex("""(?m)^loc=(.+)$""").find(text)?.groupValues?.get(1)?.trim()?.uppercase()
-                        if (!ip.isNullOrBlank() && loc != "IR") {
-                            return ip
+                        val connResp = ByteArray(4)
+                        readFully(input, connResp)
+                        if (connResp[1] == 0x00.toByte()) {
+                            when (connResp[3]) {
+                                0x01.toByte() -> readFully(input, ByteArray(4 + 2))
+                                0x03.toByte() -> {
+                                    val len = input.read()
+                                    if (len > 0) readFully(input, ByteArray(len + 2))
+                                }
+                                0x04.toByte() -> readFully(input, ByteArray(16 + 2))
+                            }
+                            val httpReq = "GET /cdn-cgi/trace HTTP/1.1\r\nHost: $hostHdr\r\nUser-Agent: AetherST/2.5\r\nConnection: close\r\n\r\n"
+                            out.write(httpReq.toByteArray(Charsets.US_ASCII))
+                            out.flush()
+                            val text = input.bufferedReader(Charsets.US_ASCII).readText()
+                            val ip = Regex("""(?m)^ip=(.+)$""").find(text)?.groupValues?.get(1)?.trim()
+                            val loc = Regex("""(?m)^loc=(.+)$""").find(text)?.groupValues?.get(1)?.trim()?.uppercase()
+                            if (!ip.isNullOrBlank() && loc != "IR") {
+                                return ip
+                            }
                         }
                     }
                 }
-            }
-        } catch (_: Exception) {}
+            } catch (_: Exception) {}
+        }
         return null
     }
 
@@ -1020,9 +1043,9 @@ class FirefoxVpnExitTunnel(
         private const val FXA_SCOPE_VPN = "profile https://identity.mozilla.com/apps/vpn"
 
         private val FXA_CLIENT_IDS = listOf(
-            "5882386c6d801776", // Official Firefox VPN proxy / Desktop FxA client ID (used by FoxyVPN & Kumiho)
-            "a2270f727f45f648", // Firefox Private Network / Fenix
-            "e6eb0d1e856335fc"  // Mozilla VPN
+            "e6eb0d1e856335fc", // Official Mozilla VPN client ID
+            "5882386c6d801776", // Official Firefox VPN proxy / Desktop FxA client ID
+            "a2270f727f45f648"  // Firefox Private Network / Fenix
         )
 
         /**
@@ -1796,7 +1819,7 @@ class FirefoxVpnExitTunnel(
             val out = ByteArrayOutputStream(256)
             writeHpackLiteralHeader(out, ":method", "CONNECT")
             writeHpackLiteralHeader(out, ":authority", authority)
-            writeHpackLiteralHeader(out, "proxy-authorization", "Bearer $proxyPass")
+            writeHpackLiteralHeader(out, "proxy-authorization", "ProxyPass $proxyPass")
             writeHpackLiteralHeader(out, "user-agent", userAgent)
             return out.toByteArray()
         }
