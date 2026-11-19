@@ -137,6 +137,16 @@ class AetherViewModel(platformContext: PlatformContext) : ViewModel() {
 
         try {
             if ((currentState == ConnectionStatus.STOPPED) || (currentState == ConnectionStatus.ERROR)) {
+                if (!hasActiveNetworkInterface()) {
+                    val isFa = cfg.resolvedLanguage() == "fa"
+                    showToast(
+                        if (isFa) "اتصال اینترنت برقرار نیست! لطفاً وای‌فای یا دیتای موبایل را روشن کنید."
+                        else "No internet connection! Please turn on Wi-Fi or mobile data.",
+                        isError = true
+                    )
+                    return
+                }
+
                 if (cfg.connectionMode == ConnectionMode.TUNNEL) {
                     if (vpnController.prepareVpn(onPermissionRequired)) {
                         ConnectionController.markStatus(ConnectionStatus.STARTING)
@@ -159,7 +169,27 @@ class AetherViewModel(platformContext: PlatformContext) : ViewModel() {
             ConnectionController.markStatus(ConnectionStatus.ERROR)
         }
     }
-
+private fun hasActiveNetworkInterface(): Boolean {
+        return try {
+            val interfaces = java.net.NetworkInterface.getNetworkInterfaces() ?: return false
+            while (interfaces.hasMoreElements()) {
+                val nif = interfaces.nextElement()
+                if (!nif.isUp || nif.isLoopback || nif.isVirtual) continue
+                val name = nif.name.lowercase()
+                if (name.startsWith("tun") || name.startsWith("tap") || name.startsWith("ppp") || name.contains("wintun")) continue
+                val addrs = nif.inetAddresses
+                while (addrs.hasMoreElements()) {
+                    val addr = addrs.nextElement()
+                    if (!addr.isLoopbackAddress && !addr.isLinkLocalAddress) {
+                        return true
+                    }
+                }
+            }
+            false
+        } catch (_: Exception) {
+            true
+        }
+    }
     fun forceStop() {
         LogRepository.w("[UI] Force stop requested by user (recovering from stuck state)", "AetherSystem")
         ConnectionController.markStatus(ConnectionStatus.STOPPED)
