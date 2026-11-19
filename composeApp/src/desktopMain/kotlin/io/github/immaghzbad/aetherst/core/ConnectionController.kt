@@ -138,7 +138,9 @@ actual object ConnectionController {
 
         private suspend fun doStart() {
             LogRepository.i("[Controller] Initializing connection process...", "AetherSystem")
-
+if (!canReachGatewayOrInternet()) {
+                throw IllegalStateException("No internet connection detected")
+            }
             val config = AetherConfigRepository.getInstance(getSettings(context)).config.value.effectiveZeroTrustConfig()
             var effectiveConfig = config
 
