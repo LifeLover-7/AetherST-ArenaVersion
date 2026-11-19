@@ -39,6 +39,17 @@ object WireGuardCrypto {
         }
     }
 
+    data class KeyPair(val privateKey: String, val publicKey: String)
+
+    fun generateKeyPair(): KeyPair {
+        val priv = X25519.generatePrivateKey()
+        val pub = X25519.publicFromPrivate(priv)
+        return KeyPair(
+            privateKey = encodeBase64(priv),
+            publicKey = encodeBase64(pub)
+        )
+    }
+
     // ==========================================
     // BLAKE2s (RFC 7693)
     // ==========================================

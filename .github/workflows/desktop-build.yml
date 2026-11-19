@@ -62,6 +62,10 @@ jobs:
       - name: Build EXE and MSI
         run: |
           ./gradlew :composeApp:packageReleaseDistributionForCurrentOS
+
+      - name: Stop Gradle Daemon
+        if: always()
+        run: |
           ./gradlew --stop
 
       - name: Upload EXE Artifact

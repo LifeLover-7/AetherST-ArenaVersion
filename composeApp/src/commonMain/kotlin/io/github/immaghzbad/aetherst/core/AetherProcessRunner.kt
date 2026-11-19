@@ -403,7 +403,7 @@ class AetherProcessRunner(private val context: PlatformContext) {
                 val line = proc.readLine() ?: break
                 val effectiveProtocol = if (
                     config.exitNodeMode == ExitNodeMode.CUSTOM_WG &&
-                    config.customWgConfig.isNotBlank() &&
+                    config.customWgConfig.isValid() &&
                     config.protocol in setOf(AetherProtocol.MASQUE, AetherProtocol.WG, AetherProtocol.GOOL)
                 ) AetherProtocol.GOOL else config.protocol
                 parseOutputLine(line, attemptId, effectiveProtocol, config.exitNodeMode, onCodeRequired)

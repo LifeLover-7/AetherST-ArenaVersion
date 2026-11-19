@@ -116,12 +116,15 @@ class WireGuardExitTunnel(
             // Engine 1: Check if Aether on primarySocksHost:primarySocksPort (127.0.0.1:2021) is ALREADY
             // exiting through the chained inner Proton/Custom WireGuard hop (via --gool or --gool-classic).
             if (primarySocksPort > 0 && !isPortListening(primarySocksHost, primarySocksPort)) {
-            onLog("[WG-Chain] Waiting up to 8s for Aether SOCKS5 ($primarySocksHost:$primarySocksPort) to finish inner WireGuard handshake...")
-            val deadline = System.currentTimeMillis() + 8_000L
-            while (System.currentTimeMillis() < deadline && !isPortListening(primarySocksHost, primarySocksPort)) {
-                Thread.sleep(250)
+                LogRepository.i(
+                    "[WG-Chain] Waiting up to 8s for Aether SOCKS5 ($primarySocksHost:$primarySocksPort) to finish inner WireGuard handshake...",
+                    "WgExit"
+                )
+                val deadline = System.currentTimeMillis() + 8_000L
+                while (System.currentTimeMillis() < deadline && !isPortListening(primarySocksHost, primarySocksPort)) {
+                    Thread.sleep(250)
+                }
             }
-        }
         if (primarySocksPort > 0 && isPortListening(primarySocksHost, primarySocksPort)) {
                 val primaryTrace = probeCloudflareTraceFull(primarySocksPort)
                 if (primaryTrace != null &&
@@ -686,7 +689,7 @@ class WireGuardExitTunnel(
         bestEndpoint: Pair<String, Int>
     ): WarpIdentity? {
         return try {
-            val keyPair = io.github.immaghzbad.aetherst.shared.util.WireGuardCrypto.generateKeyPair()
+            val keyPair = WireGuardCrypto.generateKeyPair()
             val regBody = """{"key":"${keyPair.publicKey}","install_id":"","fcm_token":"","tos":"2026-01-01T00:00:00.000Z","model":"PC","serial_number":"${UUID.randomUUID()}","locale":"en_US"}"""
             val urls = listOf(
                 "https://api.devices.cloudflare.com/v0a4471/reg",
