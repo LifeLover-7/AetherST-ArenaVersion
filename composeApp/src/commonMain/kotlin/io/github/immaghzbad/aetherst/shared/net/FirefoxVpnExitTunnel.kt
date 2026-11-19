@@ -1112,7 +1112,7 @@ class FirefoxVpnExitTunnel(
             combined.addAll(BUILTIN_SERVER_OPTIONS)
 
             val live = runCatching {
-                val client = buildClient(socksHost, socksPort, timeoutSec = 10)
+                val client = buildClient(socksHost, socksPort, timeoutSec = 4)
                 val req = Request.Builder()
                     .url(REMOTE_SETTINGS_URL)
                     .header("User-Agent", MOZILLA_VPN_UA)
@@ -1210,7 +1210,7 @@ class FirefoxVpnExitTunnel(
             }
 
             val fetched = runCatching {
-                val client = buildClient(socksHost, socksPort, timeoutSec = 10)
+                val client = buildClient(socksHost, socksPort, timeoutSec = 4)
                 val req = Request.Builder()
                     .url(REMOTE_SETTINGS_URL)
                     .header("User-Agent", MOZILLA_VPN_UA)
@@ -1727,6 +1727,73 @@ class FirefoxVpnExitTunnel(
             throw IllegalStateException("Guardian /api/v1/fpn/token rejected request (HTTP $lastStatus: ${lastBody.take(120)})")
         }
 
+        private class Socks5RemoteDnsSocket(
+            private val socksHost: String,
+            private val socksPort: Int
+        ) : Socket() {
+            override fun connect(endpoint: java.net.SocketAddress?, timeout: Int) {
+                val inetEp = endpoint as? InetSocketAddress
+                    ?: throw java.io.IOException("Invalid endpoint: $endpoint")
+                val targetHost = inetEp.hostString.ifBlank { inetEp.hostName }
+                val targetPort = inetEp.port
+                val effectiveTimeout = if (timeout > 0) timeout else 12_000
+
+                super.connect(InetSocketAddress(socksHost, socksPort), effectiveTimeout)
+                soTimeout = effectiveTimeout
+                tcpNoDelay = true
+
+                val ins = DataInputStream(getInputStream())
+                val out = getOutputStream()
+                out.write(byteArrayOf(0x05, 0x01, 0x00))
+                out.flush()
+                if (ins.read() != 0x05 || ins.read() != 0x00) {
+                    close()
+                    throw java.io.IOException("SOCKS5 greeting rejected by $socksHost:$socksPort")
+                }
+
+                val hostBytes = targetHost.toByteArray(Charsets.UTF_8)
+                val req = ByteArray(7 + hostBytes.size)
+                req[0] = 0x05; req[1] = 0x01; req[2] = 0x00; req[3] = 0x03 // ATYP = 0x03 (Domain Name)
+                req[4] = hostBytes.size.toByte()
+                System.arraycopy(hostBytes, 0, req, 5, hostBytes.size)
+                req[5 + hostBytes.size] = ((targetPort ushr 8) and 0xFF).toByte()
+                req[6 + hostBytes.size] = (targetPort and 0xFF).toByte()
+                out.write(req)
+                out.flush()
+
+                val rVer = ins.read()
+                val rRep = ins.read()
+                ins.read()
+                val rAtyp = ins.read()
+                if (rVer != 0x05 || rRep != 0x00) {
+                    close()
+                    throw java.io.IOException("SOCKS5 CONNECT to $targetHost:$targetPort failed (rep=$rRep)")
+                }
+                val skip = when (rAtyp) {
+                    0x01 -> 6
+                    0x04 -> 18
+                    0x03 -> ins.readUnsignedByte() + 2
+                    else -> 6
+                }
+                ins.readFully(ByteArray(skip))
+            }
+        }
+
+        private class Socks5RemoteDnsSocketFactory(
+            private val socksHost: String,
+            private val socksPort: Int
+        ) : javax.net.SocketFactory() {
+            override fun createSocket(): Socket = Socks5RemoteDnsSocket(socksHost, socksPort)
+            override fun createSocket(host: String, port: Int): Socket =
+                Socks5RemoteDnsSocket(socksHost, socksPort).apply { connect(InetSocketAddress.createUnresolved(host, port), 12_000) }
+            override fun createSocket(host: String, port: Int, localHost: InetAddress?, localPort: Int): Socket =
+                createSocket(host, port)
+            override fun createSocket(host: InetAddress, port: Int): Socket =
+                Socks5RemoteDnsSocket(socksHost, socksPort).apply { connect(InetSocketAddress(host, port), 12_000) }
+            override fun createSocket(address: InetAddress, port: Int, localAddress: InetAddress?, localPort: Int): Socket =
+                createSocket(address, port)
+        }
+
         private fun buildClient(socksHost: String, socksPort: Int, timeoutSec: Long): OkHttpClient {
             val builder = OkHttpClient.Builder()
                 .connectTimeout(timeoutSec, TimeUnit.SECONDS)
@@ -1738,7 +1805,16 @@ class FirefoxVpnExitTunnel(
             }.getOrDefault(false)
 
             if (socksListening && socksPort > 0) {
-                builder.proxy(Proxy(Proxy.Type.SOCKS, InetSocketAddress(socksHost, socksPort)))
+                // CRITICAL FOR IRAN ISPs: Do NOT use Proxy.Type.SOCKS with OkHttp's default Dns.SYSTEM!
+                // Dns.SYSTEM calls Android's local ISP DNS (before VPN TUN is established), which times out
+                // or returns poisoned 10.10.34.35 for vpn.mozilla.org and accounts.firefox.com.
+                // Instead, return a placeholder InetAddress preserving the hostname and dial via ATYP=0x03!
+                builder.dns(object : okhttp3.Dns {
+                    override fun lookup(hostname: String): List<InetAddress> {
+                        return listOf(InetAddress.getByAddress(hostname, byteArrayOf(1, 1, 1, 1)))
+                    }
+                })
+                builder.socketFactory(Socks5RemoteDnsSocketFactory(socksHost, socksPort))
             }
             return builder.build()
         }
@@ -1851,7 +1927,19 @@ class FirefoxVpnExitTunnel(
 
         private fun decodeH2Status(buf: ByteArray, offset: Int, len: Int): Int {
             if (len <= 0 || offset >= buf.size) return -1
-            val b0 = buf[offset].toInt() and 0xFF
+            val end = minOf(buf.size, offset + len)
+            var pos = offset
+            // Skip any leading HPACK Dynamic Table Size Update instructions (001xxxxx, RFC 7541 Section 6.3)
+            while (pos < end && (buf[pos].toInt() and 0xE0) == 0x20) {
+                val prefix = buf[pos].toInt() and 0x1F
+                pos++
+                if (prefix == 0x1F) {
+                    while (pos < end && (buf[pos].toInt() and 0x80) != 0) pos++
+                    if (pos < end) pos++
+                }
+            }
+            if (pos >= end) pos = offset
+            val b0 = buf[pos].toInt() and 0xFF
             when (b0) {
                 0x88 -> return 200
                 0x89 -> return 204
@@ -1860,6 +1948,15 @@ class FirefoxVpnExitTunnel(
                 0x8c -> return 400
                 0x8d -> return 404
                 0x8e -> return 500
+            }
+            // Also scan the first 8 bytes after pos in case another indexed pseudo-header preceded :status
+            for (scan in pos until minOf(end, pos + 8)) {
+                when (buf[scan].toInt() and 0xFF) {
+                    0x88 -> return 200
+                    0x8c -> return 400
+                    0x8d -> return 404
+                    0x8e -> return 500
+                }
             }
             val idx = when {
                 (b0 and 0xC0) == 0x40 -> b0 and 0x3F
@@ -1928,7 +2025,7 @@ class FirefoxVpnExitTunnel(
                     0x03 -> ins.readUnsignedByte() + 2
                     else -> 6
                 }
-                ins.skipBytes(skip)
+                ins.readFully(ByteArray(skip))
                 sock
             } catch (_: Exception) {
                 runCatching { sock.close() }

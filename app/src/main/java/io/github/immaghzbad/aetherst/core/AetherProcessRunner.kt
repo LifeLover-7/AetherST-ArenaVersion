@@ -40,7 +40,7 @@ object LastMimHops {
 private val MimOuterRegex = Regex("""selected\s+MASQUE\s+gateway\s+(\S+)""", RegexOption.IGNORE_CASE)
 private val MimReadyRegex = Regex("""masque-in-masque\s+ready:?\s*(\S+)\s*\(outer\)\s+and\s+(\S+)\s*\(inner\)""", RegexOption.IGNORE_CASE)
 private val ExitDetailRegex = Regex("""(?i)\b(?:gool|warp-in-warp|masque-in-masque|masque|wireguard|wg|mim)\s+exit:\s*([0-9a-fA-F.:]+),\s*([A-Za-z]{2})(?:\s+via\s+([A-Za-z0-9]+))?""")
-private val SelectedWgEndpointRegex = Regex("""(?i)(?:selected\s+wireguard\s+(?:endpoint|gateway)(?:\s*\(outer\))?|establishing\s+outer\s+warp\s+tunnel\s+to)\s+([0-9]{1,3}(?:\.[0-9]{1,3}){3}:[0-9]{2,5})""")
+private val SelectedWgEndpointRegex = Regex("""(?i)(?:selected|endpoint|gateway|validating|establishing|peer|using)[^\n]*?\b((?:162\.159|188\.114|198\.41)\.\d{1,3}\.\d{1,3}:\d{2,5})\b""")
 
 class AetherProcessRunner(private val context: Context) {
 
@@ -670,8 +670,6 @@ class AetherProcessRunner(private val context: Context) {
 
         val isLost = (_connectionStatus.value == ConnectionStatus.RUNNING && (
             lower.contains("tunnel lost") ||
-            lower.contains("broken pipe") ||
-            lower.contains("stream closed") ||
             lower.contains("tunnel ended") ||
             lower.contains("tunnel exited") ||
             lower.contains("wireguard tunnel exited") ||

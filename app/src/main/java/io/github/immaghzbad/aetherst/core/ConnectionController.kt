@@ -1063,20 +1063,32 @@ class ConnectionController private constructor(context: Context) : ConnectionCon
         return finishCoreStart(config, attemptId)
     }
 
+    fun promoteToRunning() {
+        notifyStatusChanged(appContext, ConnectionStatus.RUNNING)
+        startTimer()
+        LogRepository.i("[Controller] Full VPN tunnel (Layer-1 + Layer-2 + TUN) is now RUNNING")
+    }
+
     private suspend fun finishCoreStart(config: AetherConfig, attemptId: Long): Boolean {
         if (torChaining) return true
-        publishCoreActive(config.socksPort.toIntOrNull() ?: 2021, attemptId)
+        val holdForLayer2Tun = config.connectionMode == ConnectionMode.TUNNEL && config.exitNodeMode != ExitNodeMode.DIRECT
+        publishCoreActive(config.socksPort.toIntOrNull() ?: 2021, attemptId, holdForLayer2Tun)
         return true
     }
 
-    private suspend fun publishCoreActive(proxyPort: Int, attemptId: Long) {
+    private suspend fun publishCoreActive(proxyPort: Int, attemptId: Long, holdForLayer2Tun: Boolean = false) {
         if (activeAttemptId.get() != attemptId) return
         if (!verifyPortListening("127.0.0.1", proxyPort)) throw IllegalStateException("Proxy port $proxyPort is not listening")
-        delay(500.milliseconds)
+        delay(300.milliseconds)
         if (activeAttemptId.get() != attemptId) return
-        notifyStatusChanged(appContext, ConnectionStatus.RUNNING)
-        startTimer()
-        LogRepository.i("[Controller] Core is active and validated on port $proxyPort")
+        if (holdForLayer2Tun) {
+            notifyStatusChanged(appContext, ConnectionStatus.VALIDATING)
+            LogRepository.i("[Controller] Layer-1 core active on port $proxyPort; holding at VALIDATING until Layer-2 exit node & TUN are established")
+        } else {
+            notifyStatusChanged(appContext, ConnectionStatus.RUNNING)
+            startTimer()
+            LogRepository.i("[Controller] Core is active and validated on port $proxyPort")
+        }
     }
 
     private suspend fun lookupTunnelExitCountry(config: AetherConfig, attemptId: Long): String? {
@@ -1220,11 +1232,14 @@ class ConnectionController private constructor(context: Context) : ConnectionCon
     }
 
     override suspend fun stop() {
+        stopTimer()
+        runCatching { runner.stop() }
         mutex.withLock {
             if (_status.value == ConnectionStatus.STOPPED) {
                 stopTimer()
                 ActiveProxyProvider.psiphonProxyUrl = null
                 ActiveProxyProvider.torProxyUrl = null
+                notifyStatusChanged(appContext, ConnectionStatus.STOPPED)
                 return@withLock
             }
 

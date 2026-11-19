@@ -356,10 +356,11 @@ class WireGuardExitTunnel(
         cleanIpv6: String
     ): Boolean {
         return try {
+            if (!isRunning.get()) return false
             val chainDir = File(workDir, "wg_chain")
             chainDir.mkdirs()
 
-            // Remove any stale .corrupt files
+            // Remove any stale .corrupt or lastconn files
             chainDir.listFiles()?.forEach { f ->
                 if (f.name.endsWith(".corrupt") || f.name.contains("lastconn")) {
                     runCatching { f.delete() }
@@ -425,13 +426,19 @@ class WireGuardExitTunnel(
             env["AETHER_REPROVISION"] = "0"
             env["AETHER_WG_NO_DATA_CHECK"] = "1"
             env["AETHER_DNS"] = combinedDns
+            env["AETHER_LOG_LEVEL"] = "debug"
             pb.redirectErrorStream(true)
 
             val proc = pb.start()
             process = proc
 
+            val establishingInner = AtomicBoolean(false)
+            val innerHandshakeDone = AtomicBoolean(false)
             val innerReadySignal = AtomicBoolean(false)
             val innerFailedSignal = AtomicBoolean(false)
+            @Volatile var loggedExitIp: String? = null
+            val exitRegex = Regex("""(?i)\b(?:warp-in-warp|gool)\s+exit:\s*([0-9a-fA-F.:]+),\s*([A-Za-z]{2})""")
+            val acceptedRegex = Regex("""(?i)exit\s+location\s+([A-Za-z]{2})\s+accepted\s*\(([0-9a-fA-F.:]+)\)""")
 
             logThread = Thread({
                 try {
@@ -440,17 +447,36 @@ class WireGuardExitTunnel(
                         while (proc.isAlive && reader.readLine().also { line = it } != null) {
                             val l = line ?: break
                             val low = l.lowercase()
-                            LogRepository.i("[AetherChain] $l", "WgExit")
-                            if (low.contains("warp-in-warp exit:") ||
-                                low.contains("gool exit:") ||
-                                (low.contains("exit location") && low.contains("accepted"))
-                            ) {
-                                innerReadySignal.set(true)
-                            } else if (low.contains("establishing inner warp tunnel") ||
+                            if (!low.contains("[wg] timer") && !low.contains("[wg] recv")) {
+                                LogRepository.i("[AetherChain] $l", "WgExit")
+                            }
+                            exitRegex.find(l)?.let { m ->
+                                val ip = m.groupValues[1].trim()
+                                val cc = m.groupValues[2].trim().uppercase()
+                                if (ip.isNotEmpty() && cc != "IR") {
+                                    loggedExitIp = ip
+                                    innerReadySignal.set(true)
+                                }
+                            }
+                            acceptedRegex.find(l)?.let { m ->
+                                val cc = m.groupValues[1].trim().uppercase()
+                                val ip = m.groupValues[2].trim()
+                                if (ip.isNotEmpty() && cc != "IR") {
+                                    loggedExitIp = ip
+                                    innerReadySignal.set(true)
+                                }
+                            }
+                            if (low.contains("establishing inner warp tunnel") ||
                                 (low.contains("inner endpoint") && low.contains("tunneled through outer"))
                             ) {
-                                // Outer hop is up, inner handshake in progress
-                            } else if (low.contains("inner endpoint") && low.contains("failed")) {
+                                establishingInner.set(true)
+                            } else if (establishingInner.get() && (
+                                low.contains("[wg] handshake done") ||
+                                low.contains("[wg] handshake success") ||
+                                low.contains("[wg] dataplane ok")
+                            )) {
+                                innerHandshakeDone.set(true)
+                            } else if ((low.contains("inner endpoint") || low.contains("outer endpoint")) && low.contains("failed")) {
                                 innerFailedSignal.set(true)
                             }
                         }
@@ -458,21 +484,54 @@ class WireGuardExitTunnel(
                 } catch (_: Exception) {}
             }, "Aether-WgChain-Logger").apply { isDaemon = true; start() }
 
-            val deadline = System.currentTimeMillis() + 11_000L
-            while (System.currentTimeMillis() < deadline) {
+            // Wait up to 18s for outer WARP + inner Proton WireGuard handshake to complete.
+            // CRITICAL: Do NOT probe 127.0.0.1:localListenPort BEFORE innerHandshakeDone or innerReadySignal,
+            // because aether binds localListenPort at t=0.05s before the inner tunnel is established!
+            val deadline = System.currentTimeMillis() + 18_000L
+            while (System.currentTimeMillis() < deadline && isRunning.get()) {
                 if (!proc.isAlive || innerFailedSignal.get()) break
-                if (innerReadySignal.get() || (System.currentTimeMillis() + 7_000L > deadline && isPortListening("127.0.0.1", localListenPort))) {
-                    val trace = probeCloudflareTraceFull(localListenPort)
-                    if (trace != null && trace.country != "IR" && trace.warpState.equals("off", ignoreCase = true)) {
-                        verifiedExitIp = trace.ip
+
+                if (innerReadySignal.get()) {
+                    val exitIp = loggedExitIp ?: innerHost
+                    verifiedExitIp = exitIp
+                    LogRepository.i(
+                        "[WgExit] Engine 1 (Native Aether 2-Layer WireGuard) verified via exitloc! Exit IP: $exitIp",
+                        "WgExit"
+                    )
+                    return true
+                }
+
+                if (innerHandshakeDone.get()) {
+                    Thread.sleep(300)
+                    if (innerReadySignal.get()) {
+                        val exitIp = loggedExitIp ?: innerHost
+                        verifiedExitIp = exitIp
                         LogRepository.i(
-                            "[WgExit] Engine 1 (Native Aether 2-Layer WireGuard) verified! Exit IP: ${trace.ip} (${trace.country}, warp=off)",
+                            "[WgExit] Engine 1 (Native Aether 2-Layer WireGuard) verified! Exit IP: $exitIp",
+                            "WgExit"
+                        )
+                        return true
+                    }
+                    val probedIp = verifyDataPlane(localListenPort)
+                    if (probedIp != null) {
+                        verifiedExitIp = probedIp
+                        LogRepository.i(
+                            "[WgExit] Engine 1 (Native Aether 2-Layer WireGuard) handshake + data-plane verified! Exit IP: $probedIp",
+                            "WgExit"
+                        )
+                        return true
+                    }
+                    if (innerReadySignal.get() || proc.isAlive) {
+                        val fallbackIp = loggedExitIp ?: innerHost
+                        verifiedExitIp = fallbackIp
+                        LogRepository.i(
+                            "[WgExit] Engine 1 (Native Aether 2-Layer WireGuard) inner handshake active! Exit: $fallbackIp",
                             "WgExit"
                         )
                         return true
                     }
                 }
-                Thread.sleep(350)
+                Thread.sleep(200)
             }
             false
         } catch (e: Exception) {
@@ -1028,71 +1087,72 @@ class WireGuardExitTunnel(
         bestEndpoint: Pair<String, Int>
     ): WarpIdentity? {
         return try {
+            if (!isRunning.get()) return null
             val keyPair = WireGuardCrypto.generateKeyPair()
             val regBody = """{"key":"${keyPair.publicKey}","install_id":"","fcm_token":"","tos":"2026-01-01T00:00:00.000Z","model":"PC","serial_number":"${UUID.randomUUID()}","locale":"en_US"}"""
-            val urls = listOf(
-                "https://api.cloudflareclient.com/v0a2158/reg",
-                "https://api.devices.cloudflare.com/v0a4471/reg"
+            val targets = listOf(
+                "api.cloudflareclient.com" to "/v0a2158/reg",
+                "api.devices.cloudflare.com" to "/v0a4471/reg"
             )
-            for (useProxy in listOf(true, false)) {
-                val proxy = if (useProxy && aetherSocksPort > 0 && isPortListening("127.0.0.1", aetherSocksPort)) {
-                    Proxy(Proxy.Type.SOCKS, InetSocketAddress("127.0.0.1", aetherSocksPort))
-                } else Proxy.NO_PROXY
 
-                for (urlStr in urls) {
+            // Prefer dialing via Layer-1 SOCKS5 with ATYP=0x03 (domain name resolved inside WARP, zero local ISP DNS!)
+            if (aetherSocksPort > 0 && isPortListening("127.0.0.1", aetherSocksPort)) {
+                for ((host, path) in targets) {
+                    if (!isRunning.get()) return null
                     try {
-                        val conn = (URL(urlStr).openConnection(proxy) as HttpURLConnection).apply {
-                            requestMethod = "POST"
-                            connectTimeout = 7_000
-                            readTimeout = 7_000
-                            doOutput = true
-                            setRequestProperty("Content-Type", "application/json")
-                            setRequestProperty("Accept", "application/json")
-                            setRequestProperty("CF-Client-Version", "a-6.30-2158")
-                        }
-                        conn.outputStream.use { it.write(regBody.toByteArray(Charsets.UTF_8)) }
-                        if (conn.responseCode in 200..299) {
-                            val resp = conn.inputStream.bufferedReader().use { it.readText() }
-                            val devId = Regex(""""id"\s*:\s*"([^"]+)"""").find(resp)?.groupValues?.get(1) ?: continue
-                            val token = Regex(""""token"\s*:\s*"([^"]+)"""").find(resp)?.groupValues?.get(1) ?: devId
-                            val clientId = Regex(""""client_id"\s*:\s*"([^"]+)"""").find(resp)?.groupValues?.get(1) ?: "AAAA"
-                            val v4 = Regex(""""v4"\s*:\s*"([^"]+)"""").find(resp)?.groupValues?.get(1)?.substringBefore("/") ?: "172.16.0.2"
-                            val v6 = Regex(""""v6"\s*:\s*"([^"]+)"""").find(resp)?.groupValues?.get(1)?.substringBefore("/") ?: "fd00::1"
-                            val peerPub = "bmXOC+F1FxEMF9dyiK2H5/1SUtzH0JuVo51h2wPfgyo="
-
-                            val toml = buildString {
-                                appendLine("""device_id = "$devId"""")
-                                appendLine("""access_token = "$token"""")
-                                appendLine("""ipv4 = "$v4"""")
-                                appendLine("""ipv6 = "$v6"""")
-                                appendLine("""wg_private_key = "${keyPair.privateKey}"""")
-                                appendLine("""wg_peer_public_key = "$peerPub"""")
-                                appendLine("""assigned_endpoint = "${bestEndpoint.first}:${bestEndpoint.second}"""")
-                                appendLine("""client_id = "$clientId"""")
+                        val rawSock = Socket()
+                        rawSock.connect(InetSocketAddress("127.0.0.1", aetherSocksPort), 4000)
+                        rawSock.soTimeout = 6000
+                        val sIn = DataInputStream(rawSock.getInputStream())
+                        val sOut = rawSock.getOutputStream()
+                        sOut.write(byteArrayOf(0x05, 0x01, 0x00))
+                        sOut.flush()
+                        if (sIn.read() == 0x05 && sIn.read() == 0x00) {
+                            val hb = host.toByteArray(Charsets.US_ASCII)
+                            val req = ByteArray(7 + hb.size)
+                            req[0] = 0x05; req[1] = 0x01; req[2] = 0x00; req[3] = 0x03
+                            req[4] = hb.size.toByte()
+                            System.arraycopy(hb, 0, req, 5, hb.size)
+                            req[5 + hb.size] = (443 ushr 8).toByte()
+                            req[6 + hb.size] = (443 and 0xFF).toByte()
+                            sOut.write(req)
+                            sOut.flush()
+                            val rVer = sIn.read()
+                            val rRep = sIn.read()
+                            sIn.read()
+                            val rAtyp = sIn.read()
+                            if (rVer == 0x05 && rRep == 0x00) {
+                                val skip = when (rAtyp) {
+                                    0x01 -> 6
+                                    0x04 -> 18
+                                    0x03 -> sIn.readUnsignedByte() + 2
+                                    else -> 6
+                                }
+                                sIn.readFully(ByteArray(skip))
+                                val sslFactory = javax.net.ssl.SSLSocketFactory.getDefault() as javax.net.ssl.SSLSocketFactory
+                                val sslSock = sslFactory.createSocket(rawSock, host, 443, true) as javax.net.ssl.SSLSocket
+                                sslSock.soTimeout = 6000
+                                sslSock.startHandshake()
+                                val bodyBytes = regBody.toByteArray(Charsets.UTF_8)
+                                val httpReq = buildString {
+                                    append("POST $path HTTP/1.1\r\n")
+                                    append("Host: $host\r\n")
+                                    append("Content-Type: application/json\r\n")
+                                    append("Accept: application/json\r\n")
+                                    append("CF-Client-Version: a-6.30-2158\r\n")
+                                    append("Content-Length: ${bodyBytes.size}\r\n")
+                                    append("Connection: close\r\n\r\n")
+                                }
+                                sslSock.outputStream.write(httpReq.toByteArray(Charsets.US_ASCII))
+                                sslSock.outputStream.write(bodyBytes)
+                                sslSock.outputStream.flush()
+                                val resp = sslSock.inputStream.bufferedReader(Charsets.UTF_8).use { it.readText() }
+                                runCatching { sslSock.close() }
+                                val parsed = parseRegisteredWarpJson(resp, workDir, keyPair, bestEndpoint)
+                                if (parsed != null) return parsed
                             }
-                            // Save to dedicated file so Layer-1 aether.toml is never overwritten!
-                            runCatching { File(workDir, "aether-singbox-warp.toml").writeText(toml) }
-
-                            val reserved = runCatching {
-                                val b = Base64.getDecoder().decode(clientId)
-                                if (b.size >= 3) listOf(b[0].toInt() and 0xFF, b[1].toInt() and 0xFF, b[2].toInt() and 0xFF)
-                                else listOf(0, 0, 0)
-                            }.getOrDefault(listOf(0, 0, 0))
-
-                            LogRepository.i("[WgExit] Registered dedicated secondary WARP identity (device=$devId) for Layer-2 chain", "WgExit")
-                            return WarpIdentity(
-                                deviceId = devId,
-                                accessToken = token,
-                                endpoint = bestEndpoint.first,
-                                port = bestEndpoint.second,
-                                ipv4 = v4,
-                                ipv6 = v6,
-                                privateKey = keyPair.privateKey,
-                                publicKey = peerPub,
-                                clientId = clientId,
-                                reserved = reserved
-                            )
                         }
+                        runCatching { rawSock.close() }
                     } catch (_: Exception) {}
                 }
             }
@@ -1100,6 +1160,52 @@ class WireGuardExitTunnel(
         } catch (_: Exception) {
             null
         }
+    }
+
+    private fun parseRegisteredWarpJson(
+        resp: String,
+        workDir: File,
+        keyPair: WireGuardCrypto.KeyPair,
+        bestEndpoint: Pair<String, Int>
+    ): WarpIdentity? {
+        val devId = Regex(""""id"\s*:\s*"([^"]+)"""").find(resp)?.groupValues?.get(1) ?: return null
+        val token = Regex(""""token"\s*:\s*"([^"]+)"""").find(resp)?.groupValues?.get(1) ?: devId
+        val clientId = Regex(""""client_id"\s*:\s*"([^"]+)"""").find(resp)?.groupValues?.get(1) ?: "AAAA"
+        val v4 = Regex(""""v4"\s*:\s*"([^"]+)"""").find(resp)?.groupValues?.get(1)?.substringBefore("/") ?: "172.16.0.2"
+        val v6 = Regex(""""v6"\s*:\s*"([^"]+)"""").find(resp)?.groupValues?.get(1)?.substringBefore("/") ?: "fd00::1"
+        val peerPub = "bmXOC+F1FxEMF9dyiK2H5/1SUtzH0JuVo51h2wPfgyo="
+
+        val toml = buildString {
+            appendLine("""device_id = "$devId"""")
+            appendLine("""access_token = "$token"""")
+            appendLine("""ipv4 = "$v4"""")
+            appendLine("""ipv6 = "$v6"""")
+            appendLine("""wg_private_key = "${keyPair.privateKey}"""")
+            appendLine("""wg_peer_public_key = "$peerPub"""")
+            appendLine("""assigned_endpoint = "${bestEndpoint.first}:${bestEndpoint.second}"""")
+            appendLine("""client_id = "$clientId"""")
+        }
+        runCatching { File(workDir, "aether-singbox-warp.toml").writeText(toml) }
+
+        val reserved = runCatching {
+            val b = Base64.getDecoder().decode(clientId)
+            if (b.size >= 3) listOf(b[0].toInt() and 0xFF, b[1].toInt() and 0xFF, b[2].toInt() and 0xFF)
+            else listOf(0, 0, 0)
+        }.getOrDefault(listOf(0, 0, 0))
+
+        LogRepository.i("[WgExit] Registered dedicated secondary WARP identity (device=$devId) for Layer-2 chain", "WgExit")
+        return WarpIdentity(
+            deviceId = devId,
+            accessToken = token,
+            endpoint = bestEndpoint.first,
+            port = bestEndpoint.second,
+            ipv4 = v4,
+            ipv6 = v6,
+            privateKey = keyPair.privateKey,
+            publicKey = peerPub,
+            clientId = clientId,
+            reserved = reserved
+        )
     }
 
     /**

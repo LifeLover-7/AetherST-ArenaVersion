@@ -394,7 +394,8 @@ class AetherVpnService : VpnService() {
 
                 // گام ۱: ابتدا هسته و زنجیره (Psiphon/Tor) بدون اختلال تونل مجازی متصل و تایید شوند
                 getController().start()
-                if (ConnectionController.status.value != ConnectionStatus.RUNNING) {
+                val postCoreStatus = ConnectionController.status.value
+                if (postCoreStatus != ConnectionStatus.RUNNING && postCoreStatus != ConnectionStatus.VALIDATING) {
                     throw IllegalStateException("Core failed to start")
                 }
                 ensureCurrentAttempt(attemptId)
@@ -492,6 +493,7 @@ class AetherVpnService : VpnService() {
                 }
 
                 wasEverRunning = true
+                getController().promoteToRunning()
                 startStatsJob()
                 LogRepository.i("[VpnService] VPN tunnel active on $targetHost:$targetPort (MTU=$effectiveMtu)")
 
@@ -644,22 +646,26 @@ class AetherVpnService : VpnService() {
         autoReconnectJob?.cancel()
         autoReconnectJob = null
         wasEverRunning = false
+        val attemptId = activeAttemptId.getAndSet(0)
+        startupJob?.cancel()
+        stopStatsJob()
+
+        // Immediately signal Layer-2 tunnels to abort any in-progress blocking handshake
+        runCatching { wgExitTunnel?.stop() }
+        runCatching { firefoxVpnTunnel?.stop() }
+        runCatching { customSocksRelay?.stop() }
+
         scope.launch {
-            val attemptId = activeAttemptId.getAndSet(0)
-            startupJob?.cancelAndJoin()
-            stopStatsJob()
-
+            withTimeoutOrNull(1500.milliseconds) {
+                runCatching { startupJob?.join() }
+            }
             cleanupResources(attemptId, forceTeardown = true)
-            if (commandCounter.get() != commandId) return@launch
-
             runCatching { getController().stop() }.onFailure {
                 LogRepository.e("[VpnService] Controller stop failed: ${it.localizedMessage}")
             }
 
-            if (commandCounter.get() != commandId) return@launch
-
             scope.launch(Dispatchers.Main) {
-                if (isActive && commandCounter.get() == commandId) {
+                if (isActive && isUserInitiatedStop) {
                     stopForeground(STOP_FOREGROUND_REMOVE)
                     stopSelf()
                 }
@@ -925,13 +931,14 @@ class AetherVpnService : VpnService() {
                             primarySocksPort = primaryPort,
                             localListenPort = localPort
                         )
+                        wgExitTunnel = tunnel
                         val started = runCatching { tunnel.start() }.getOrDefault(false)
-                        if (started) {
-                            wgExitTunnel = tunnel
+                        if (started && !isUserInitiatedStop) {
                             ActiveProxyProvider.customWgPort = localPort
                             LogRepository.i("[VpnService] WireGuard exit node active on port $localPort (Verified IP: ${tunnel.verifiedExitIp})")
                             return "127.0.0.1" to localPort
                         } else {
+                            wgExitTunnel = null
                             val err = tunnel.lastErrorMessage ?: "Layer-2 WireGuard handshake failed"
                             LogRepository.e("[VpnService] $err")
                             throw IllegalStateException(err)
@@ -988,13 +995,14 @@ class AetherVpnService : VpnService() {
                         primarySocksPort = primaryPort,
                         localListenPort = localPort
                     )
+                    firefoxVpnTunnel = tunnel
                     val started = runCatching { tunnel.start() }.getOrDefault(false)
-                    if (started) {
-                        firefoxVpnTunnel = tunnel
+                    if (started && !isUserInitiatedStop) {
                         ActiveProxyProvider.firefoxVpnPort = localPort
                         LogRepository.i("[VpnService] Firefox VPN exit node active on port $localPort (Verified IP: ${tunnel.verifiedExitIp})")
                         return "127.0.0.1" to localPort
                     } else {
+                        firefoxVpnTunnel = null
                         val err = tunnel.lastErrorMessage ?: "Firefox VPN authentication or data-plane failed"
                         LogRepository.e("[VpnService] $err")
                         throw IllegalStateException(err)
