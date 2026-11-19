@@ -510,11 +510,113 @@ actual fun FirefoxVpnWebView(
                                         window._fxaHookInstalled = true;
                                         window._fxaPendingSession = null;
                                         window._fxaPendingEmail = '';
+                                        window._fxaDelivered = false;
 
-                                        function deliver(email, token) {
-                                            if (token && token.length >= 32 && window.FirefoxBridge) {
-                                                window.FirefoxBridge.onFxaSessionExtracted(email || window._fxaPendingEmail || '', token);
+                                        function hexToBytes(hex) {
+                                            var bytes = new Uint8Array(hex.length / 2);
+                                            for (var i = 0; i < bytes.length; i++) {
+                                                bytes[i] = parseInt(hex.substr(i * 2, 2), 16);
                                             }
+                                            return bytes;
+                                        }
+
+                                        function bytesToHex(bytes) {
+                                            var arr = new Uint8Array(bytes);
+                                            var s = '';
+                                            for (var i = 0; i < arr.length; i++) {
+                                                s += ('0' + arr[i].toString(16)).slice(-2);
+                                            }
+                                            return s;
+                                        }
+
+                                        function bytesToB64(bytes) {
+                                            var bin = '';
+                                            var arr = new Uint8Array(bytes);
+                                            for (var i = 0; i < arr.length; i++) bin += String.fromCharCode(arr[i]);
+                                            return btoa(bin);
+                                        }
+
+                                        async function tryMintVpnOAuthInBrowser(sessionTokenHex) {
+                                            try {
+                                                if (!window.crypto || !window.crypto.subtle) return null;
+                                                var ikm = hexToBytes(sessionTokenHex);
+                                                var zeroSalt = new Uint8Array(32);
+                                                var enc = new TextEncoder();
+                                                var prkKey = await crypto.subtle.importKey('raw', zeroSalt, {name:'HMAC', hash:'SHA-256'}, false, ['sign']);
+                                                var prk = await crypto.subtle.sign('HMAC', prkKey, ikm);
+                                                var prkImport = await crypto.subtle.importKey('raw', prk, {name:'HMAC', hash:'SHA-256'}, false, ['sign']);
+                                                var info = enc.encode('identity.mozilla.com/picl/v1/sessionToken');
+                                                var t1In = new Uint8Array(info.length + 1);
+                                                t1In.set(info, 0); t1In[info.length] = 1;
+                                                var t1 = new Uint8Array(await crypto.subtle.sign('HMAC', prkImport, t1In));
+                                                var t2In = new Uint8Array(t1.length + info.length + 1);
+                                                t2In.set(t1, 0); t2In.set(info, t1.length); t2In[t1.length + info.length] = 2;
+                                                var t2 = new Uint8Array(await crypto.subtle.sign('HMAC', prkImport, t2In));
+                                                var tokenIdHex = bytesToHex(t1);
+                                                var reqHmacKey = await crypto.subtle.importKey('raw', t2, {name:'HMAC', hash:'SHA-256'}, false, ['sign']);
+
+                                                var bodyStr = JSON.stringify({
+                                                    client_id: '5882386c6d801776',
+                                                    grant_type: 'fxa-credentials',
+                                                    scope: 'profile https://identity.mozilla.com/apps/vpn',
+                                                    access_type: 'offline'
+                                                });
+                                                var payloadNorm = 'hawk.1.payload\napplication/json\n' + bodyStr + '\n';
+                                                var payloadHash = bytesToB64(await crypto.subtle.digest('SHA-256', enc.encode(payloadNorm)));
+                                                var ts = Math.floor(Date.now() / 1000).toString();
+                                                var nonce = Math.random().toString(36).substring(2, 10);
+
+                                                var hosts = [
+                                                    {host: 'oauth.accounts.firefox.com', url: 'https://oauth.accounts.firefox.com/v1/oauth/token'},
+                                                    {host: 'api.accounts.firefox.com', url: 'https://api.accounts.firefox.com/v1/oauth/token'}
+                                                ];
+                                                for (var i = 0; i < hosts.length; i++) {
+                                                    var h = hosts[i];
+                                                    var norm = 'hawk.1.header\n' + ts + '\n' + nonce + '\nPOST\n/v1/oauth/token\n' + h.host + '\n443\n' + payloadHash + '\n\n';
+                                                    var macB64 = bytesToB64(await crypto.subtle.sign('HMAC', reqHmacKey, enc.encode(norm)));
+                                                    var hawk = 'Hawk id="' + tokenIdHex + '", ts="' + ts + '", nonce="' + nonce + '", hash="' + payloadHash + '", mac="' + macB64 + '"';
+                                                    var resp = await fetch(h.url, {
+                                                        method: 'POST',
+                                                        headers: {'Content-Type': 'application/json', 'Authorization': hawk},
+                                                        body: bodyStr
+                                                    });
+                                                    if (resp.ok) {
+                                                        var js = await resp.json();
+                                                        if (js && js.access_token) return js.access_token;
+                                                    }
+                                                }
+                                            } catch (e) {}
+                                            return null;
+                                        }
+
+                                        function deliverSession(email, sessionTokenHex) {
+                                            if (window._fxaDelivered) return;
+                                            if (!sessionTokenHex || !/^[0-9a-fA-F]{64}$/.test(sessionTokenHex)) return;
+                                            window._fxaDelivered = true;
+                                            var finalEmail = email || window._fxaPendingEmail || '';
+                                            var done = false;
+                                            var timer = setTimeout(function() {
+                                                if (!done && window.FirefoxBridge) {
+                                                    done = true;
+                                                    window.FirefoxBridge.onFxaSessionExtracted(finalEmail, sessionTokenHex);
+                                                }
+                                            }, 2500);
+                                            tryMintVpnOAuthInBrowser(sessionTokenHex).then(function(vpnOAuth) {
+                                                if (done) return;
+                                                done = true;
+                                                clearTimeout(timer);
+                                                var payload = vpnOAuth ? ('fxa:' + sessionTokenHex + ':' + vpnOAuth) : sessionTokenHex;
+                                                if (window.FirefoxBridge) {
+                                                    window.FirefoxBridge.onFxaSessionExtracted(finalEmail, payload);
+                                                }
+                                            }).catch(function() {
+                                                if (done) return;
+                                                done = true;
+                                                clearTimeout(timer);
+                                                if (window.FirefoxBridge) {
+                                                    window.FirefoxBridge.onFxaSessionExtracted(finalEmail, sessionTokenHex);
+                                                }
+                                            });
                                         }
 
                                         function inspectFxaStorage() {
@@ -524,14 +626,15 @@ actual fun FirefoxVpnWebView(
                                                 var accounts = JSON.parse(raw);
                                                 for (var uid in accounts) {
                                                     var acc = accounts[uid];
-                                                    if (acc && acc.sessionToken) {
+                                                    if (acc && acc.sessionToken && /^[0-9a-fA-F]{64}$/.test(acc.sessionToken)) {
                                                         if (acc.email) window._fxaPendingEmail = acc.email;
+                                                        window._fxaPendingSession = acc.sessionToken;
                                                         var onVerifyPage = location.pathname.indexOf('signin_token_code') !== -1 ||
                                                                            location.pathname.indexOf('confirm') !== -1 ||
                                                                            location.pathname.indexOf('totp') !== -1 ||
                                                                            location.pathname.indexOf('unblock') !== -1;
                                                         if (acc.verified === true || (!onVerifyPage && location.pathname.indexOf('/settings') === 0)) {
-                                                            deliver(acc.email || '', acc.sessionToken);
+                                                            deliverSession(acc.email || '', acc.sessionToken);
                                                             return;
                                                         }
                                                     }
@@ -539,7 +642,6 @@ actual fun FirefoxVpnWebView(
                                             } catch (e) {}
                                         }
 
-                                        // Hook window.fetch to intercept /v1/account/login, /v1/session/verify_code, /v1/oauth/token
                                         var origFetch = window.fetch;
                                         if (origFetch) {
                                             window.fetch = function() {
@@ -554,21 +656,16 @@ actual fun FirefoxVpnWebView(
                                                                 if (data && data.sessionToken) {
                                                                     window._fxaPendingSession = data.sessionToken;
                                                                     if (data.verified === true) {
-                                                                        deliver(window._fxaPendingEmail, data.sessionToken);
+                                                                        deliverSession(window._fxaPendingEmail, data.sessionToken);
                                                                     }
                                                                 }
                                                             } else if (reqUrl.indexOf('/v1/session/verify_code') !== -1 ||
                                                                        reqUrl.indexOf('/v1/totp/verify') !== -1 ||
                                                                        reqUrl.indexOf('/v1/recovery_email/verify_code') !== -1) {
                                                                 if (response.ok && window._fxaPendingSession) {
-                                                                    deliver(window._fxaPendingEmail, window._fxaPendingSession);
+                                                                    deliverSession(window._fxaPendingEmail, window._fxaPendingSession);
                                                                 } else if (response.ok) {
                                                                     setTimeout(inspectFxaStorage, 300);
-                                                                }
-                                                            } else if (reqUrl.indexOf('/v1/oauth/token') !== -1) {
-                                                                var oData = JSON.parse(bodyText);
-                                                                if (oData && oData.access_token) {
-                                                                    deliver(window._fxaPendingEmail, oData.access_token);
                                                                 }
                                                             }
                                                         }).catch(function(){});
@@ -578,42 +675,6 @@ actual fun FirefoxVpnWebView(
                                             };
                                         }
 
-                                        // Hook XMLHttpRequest as fallback
-                                        var origOpen = XMLHttpRequest.prototype.open;
-                                        var origSend = XMLHttpRequest.prototype.send;
-                                        XMLHttpRequest.prototype.open = function(method, u) {
-                                            this._fxaUrl = String(u || '');
-                                            return origOpen.apply(this, arguments);
-                                        };
-                                        XMLHttpRequest.prototype.send = function() {
-                                            var xhr = this;
-                                            xhr.addEventListener('load', function() {
-                                                try {
-                                                    var u = xhr._fxaUrl || '';
-                                                    if (u.indexOf('/v1/account/login') !== -1) {
-                                                        var data = JSON.parse(xhr.responseText);
-                                                        if (data && data.sessionToken) {
-                                                            window._fxaPendingSession = data.sessionToken;
-                                                            if (data.verified === true) {
-                                                                deliver(window._fxaPendingEmail, data.sessionToken);
-                                                            }
-                                                        }
-                                                    } else if (u.indexOf('/v1/session/verify_code') !== -1 || u.indexOf('/v1/totp/verify') !== -1) {
-                                                        if (xhr.status >= 200 && xhr.status < 300 && window._fxaPendingSession) {
-                                                            deliver(window._fxaPendingEmail, window._fxaPendingSession);
-                                                        }
-                                                    } else if (u.indexOf('/v1/oauth/token') !== -1) {
-                                                        var oData = JSON.parse(xhr.responseText);
-                                                        if (oData && oData.access_token) {
-                                                            deliver(window._fxaPendingEmail, oData.access_token);
-                                                        }
-                                                    }
-                                                } catch (e) {}
-                                            });
-                                            return origSend.apply(this, arguments);
-                                        };
-
-                                        // Track email input field
                                         document.addEventListener('input', function(e) {
                                             if (e.target && (e.target.type === 'email' || e.target.name === 'email')) {
                                                 window._fxaPendingEmail = e.target.value || '';

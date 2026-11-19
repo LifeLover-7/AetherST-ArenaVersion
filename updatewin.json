@@ -1,7 +1,7 @@
 {
-  "version": "2.1.4",
-  "version_code": 25,
+  "version": "2.1.5",
+  "version_code": 26,
   "is_beta": false,
-  "changelog": "Comprehensive stability fixes, Proton VPN integration, Firefox VPN chained exit node, and optimized userspace routing.",
-  "release_url": "https://github.com/LifeLover-7/AetherST-Private/releases/tag/v2.1.4"
+  "changelog": "Fix 2-layer WireGuard chaining (Aether + Proton) and Firefox VPN Guardian HTTP/2 engine.",
+  "release_url": "https://github.com/LifeLover-7/AetherST-Private/releases/tag/v2.1.5"
 }

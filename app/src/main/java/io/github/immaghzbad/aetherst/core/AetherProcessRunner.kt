@@ -372,10 +372,13 @@ class AetherProcessRunner(private val context: Context) {
 
             val logLevelArg = if (config.coreLogLevel == AetherLogLevel.DEBUG) "debug" else "info"
 
+            val preEnv = mutableMapOf<String, String>()
+            prepareCustomWireGuardNativeChain(config, context.filesDir, binaryFile.absolutePath, commandList, preEnv)
             val pb = ProcessBuilder(commandList)
             pb.directory(context.filesDir)
 
             val env = pb.environment()
+            env.putAll(preEnv)
             env["AETHER_PROTOCOL"] = config.protocol.rawValue
             env["AETHER_NOIZE"] = effectiveNoise
             env["AETHER_SCAN"] = config.scanMode.rawValue
@@ -525,6 +528,7 @@ class AetherProcessRunner(private val context: Context) {
 
             env["AETHER_PERF_PROFILE"] = config.perfProfile.rawValue
             env["AETHER_LOG_LEVEL"] = logLevelArg
+            env.putAll(preEnv)
 
             pb.redirectErrorStream(true)
             proc = withContext(Dispatchers.IO) { pb.start() }
@@ -560,7 +564,12 @@ class AetherProcessRunner(private val context: Context) {
                         if (currentAttemptId.get() != attemptId) null else throw e
                     } ?: break
 
-                    parseOutputLine(line, attemptId, config.protocol, config.exitNodeMode, onCodeRequired)
+                    val effectiveProtocol = if (
+                        config.exitNodeMode == ExitNodeMode.CUSTOM_WG &&
+                        config.customWgConfig.isNotBlank() &&
+                        config.protocol in setOf(AetherProtocol.MASQUE, AetherProtocol.WG, AetherProtocol.GOOL)
+                    ) AetherProtocol.GOOL else config.protocol
+                    parseOutputLine(line, attemptId, effectiveProtocol, config.exitNodeMode, onCodeRequired)
                 }
             }
 
@@ -680,18 +689,14 @@ class AetherProcessRunner(private val context: Context) {
             lower.contains("tls established") || lower.contains("tls handshake complete") -> {
                 updateState(ConnectionStatus.VALIDATING, attemptId)
             }
-            lower.contains("connect-ip status: 200") || lower.contains("connect-ip established") -> {
-                quickRetryPending.set(false)
-                dataPlaneOk = true
-                updateState(ConnectionStatus.DATAPLANE_VALIDATED, attemptId)
-            }
             protocol == AetherProtocol.GOOL -> {
                 when {
                     lower.contains("gool ready") ||
                     lower.contains("gool exit:") ||
                     (lower.contains("inner") && lower.contains("tunnel validated")) ||
                     lower.contains("wiw ready") ||
-                    lower.contains("warp-in-warp ready") -> {
+                    lower.contains("warp-in-warp ready") ||
+                    lower.contains("serving socks5") -> {
                         quickRetryPending.set(false)
                         dataPlaneOk = true
                         updateState(ConnectionStatus.DATAPLANE_VALIDATED, attemptId)
@@ -706,11 +711,17 @@ class AetherProcessRunner(private val context: Context) {
                     lower.contains("registering the gool") ||
                     lower.contains("validating wireguard tunnel") ||
                     lower.contains("connect-ip status: 200") ||
+                    lower.contains("connect-ip established") ||
                     (lower.contains("tunnel validated") && !lower.contains("inner")) -> {
                         goolOuterValidated = true
                         updateState(ConnectionStatus.VALIDATING, attemptId)
                     }
                 }
+            }
+            lower.contains("connect-ip status: 200") || lower.contains("connect-ip established") -> {
+                quickRetryPending.set(false)
+                dataPlaneOk = true
+                updateState(ConnectionStatus.DATAPLANE_VALIDATED, attemptId)
             }
             (protocol != AetherProtocol.GOOL) && (
                 lower.contains("tunnel validated") ||
@@ -834,4 +845,122 @@ class AetherProcessRunner(private val context: Context) {
         stop()
         scope.cancel()
     }
+
+    private fun prepareCustomWireGuardNativeChain(
+        config: AetherConfig,
+        workDir: java.io.File,
+        binaryPath: String,
+        command: MutableList<String>,
+        env: MutableMap<String, String>
+    ) {
+        val innerFiles = listOf(
+            java.io.File(workDir, "aether-gool.toml"),
+            java.io.File(workDir, "aether-masque-gool.toml"),
+            java.io.File(workDir, "aether-secondary.toml"),
+            java.io.File(workDir, "aether-wg-secondary.toml")
+        )
+        if (config.exitNodeMode != ExitNodeMode.CUSTOM_WG) {
+            for (f in innerFiles) {
+                runCatching {
+                    if (f.exists() && f.readText().contains("custom-wg-inner")) {
+                        f.delete()
+                    }
+                }
+            }
+            return
+        }
+
+        val targetWg = if (config.customWgAutoSelect && config.customWgProfiles.isNotEmpty()) {
+            io.github.immaghzbad.aetherst.shared.net.WireGuardExitTunnel.selectFastestProfile(
+                config.customWgProfiles,
+                config.customWgConfig
+            )
+        } else {
+            config.customWgConfig
+        }
+        if (!targetWg.isValid()) return
+
+        val rawEp = targetWg.endpoint.trim()
+        val epHostRaw = if (rawEp.startsWith("[")) {
+            rawEp.substringAfter('[').substringBefore(']')
+        } else {
+            rawEp.substringBeforeLast(':')
+        }.trim()
+        val epPort = rawEp.substringAfterLast(':', "51820").trim().toIntOrNull() ?: 51820
+        val epHostIp = runCatching {
+            if (epHostRaw.matches(Regex("^\\d{1,3}(\\.\\d{1,3}){3}$")) || epHostRaw.contains(":")) epHostRaw
+            else java.net.InetAddress.getAllByName(epHostRaw).firstOrNull { it.address.size == 4 }?.hostAddress ?: epHostRaw
+        }.getOrDefault(epHostRaw)
+        val resolvedEndpoint = "$epHostIp:$epPort"
+        val cleanIpv4 = targetWg.addressV4.substringBefore('/').trim().ifBlank { "10.2.0.2" }
+
+        // Protect outer Cloudflare WARP identity files from accidental pollution with custom WG private key
+        for (outerName in listOf("aether.toml", "aether-wg.toml", "aether-masque.toml")) {
+            val outerFile = java.io.File(workDir, outerName)
+            runCatching {
+                if (outerFile.exists() && outerFile.readText().contains(targetWg.privateKey.trim())) {
+                    outerFile.delete()
+                }
+            }
+        }
+
+        val outerToml = java.io.File(workDir, "aether.toml")
+        val isClassicWg = config.protocol == AetherProtocol.WG || (config.protocol == AetherProtocol.GOOL && config.goolClassic)
+        if (isClassicWg && !outerToml.exists()) {
+            runCatching {
+                LogRepository.i("[AetherCore] Provisioning outer Cloudflare WARP identity (aether.toml) before starting 2-layer WireGuard chain...")
+                ProcessBuilder(binaryPath, "--register", "wg")
+                    .directory(workDir)
+                    .start()
+                    .waitFor(12, java.util.concurrent.TimeUnit.SECONDS)
+            }
+        }
+
+        val innerTomlContent = buildString {
+            appendLine("device_id = \"custom-wg-inner\"")
+            appendLine("access_token = \"custom-wg-token\"")
+            appendLine("ipv4 = \"$cleanIpv4\"")
+            appendLine("wg_private_key = \"${targetWg.privateKey.trim()}\"")
+            appendLine("wg_peer_public_key = \"${targetWg.publicKey.trim()}\"")
+            appendLine("assigned_endpoint = \"$resolvedEndpoint\"")
+            appendLine("client_id = \"AAAA\"")
+        }
+        for (f in innerFiles) {
+            runCatching { f.writeText(innerTomlContent) }
+        }
+
+        if (config.protocol in setOf(AetherProtocol.MASQUE, AetherProtocol.GOOL, AetherProtocol.WG)) {
+            command.removeAll(listOf("--masque", "--wg", "--gool", "--gool-classic"))
+            if (isClassicWg) {
+                command.add("--gool-classic")
+                command.removeAll(listOf("--wiw-inner"))
+                command.add("--wiw-inner")
+                command.add(resolvedEndpoint)
+                env["AETHER_PROTOCOL"] = "gool"
+                env["AETHER_GOOL_MODE"] = "classic"
+                env["AETHER_WIW_INNER_PEER"] = resolvedEndpoint
+                if (outerToml.exists()) {
+                    command.add("--api-address")
+                    command.add("127.0.0.1:1")
+                }
+            } else {
+                command.add("--gool")
+                command.removeAll(listOf("--gool-peer"))
+                command.add("--gool-peer")
+                command.add(resolvedEndpoint)
+                env["AETHER_PROTOCOL"] = "gool"
+                env["AETHER_GOOL_INNER"] = resolvedEndpoint
+            }
+
+            val customDns = targetWg.dnsServers.firstOrNull { it.isNotBlank() } ?: "10.2.0.1"
+            val combinedDns = "$customDns,1.1.1.1,1.0.0.1"
+            if (!command.contains("--dns")) {
+                command.add("--dns")
+                command.add(combinedDns)
+            }
+            env["AETHER_DNS"] = combinedDns
+            LogRepository.i("[AetherCore] Configured native 2-layer WireGuard chain -> Inner Peer: $resolvedEndpoint (IPv4: $cleanIpv4, DNS: $customDns)")
+        }
+    }
+
 }

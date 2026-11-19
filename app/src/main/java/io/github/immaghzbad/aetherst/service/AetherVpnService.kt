@@ -28,7 +28,6 @@ import io.github.immaghzbad.aetherst.core.HevTun2SocksNative
 import io.github.immaghzbad.aetherst.core.PsiphonController
 import io.github.immaghzbad.aetherst.core.TorController
 import io.github.immaghzbad.aetherst.core.RoutingEngine
-import io.github.immaghzbad.aetherst.core.SocksGate
 import io.github.immaghzbad.aetherst.core.SocksTunBridge
 import io.github.immaghzbad.aetherst.platform.PlatformContext
 import io.github.immaghzbad.aetherst.platform.getSettings
@@ -43,7 +42,6 @@ import io.github.immaghzbad.aetherst.shared.model.ConnectionStatus
 import io.github.immaghzbad.aetherst.shared.model.CustomWireGuardConfig
 import io.github.immaghzbad.aetherst.shared.model.ExitNodeMode
 import io.github.immaghzbad.aetherst.shared.model.RoutingMode
-import io.github.immaghzbad.aetherst.shared.model.SocksReadiness
 import io.github.immaghzbad.aetherst.shared.model.TunnelEngine
 import io.github.immaghzbad.aetherst.shared.net.CustomSocks5Relay
 import io.github.immaghzbad.aetherst.shared.net.WireGuardExitTunnel
