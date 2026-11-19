@@ -560,7 +560,7 @@ class AetherProcessRunner(private val context: Context) {
                         if (currentAttemptId.get() != attemptId) null else throw e
                     } ?: break
 
-                    parseOutputLine(line, attemptId, config.protocol, onCodeRequired)
+                    parseOutputLine(line, attemptId, config.protocol, config.exitNodeMode, onCodeRequired)
                 }
             }
 
@@ -594,7 +594,7 @@ class AetherProcessRunner(private val context: Context) {
         )
     }
 
-    private suspend fun parseOutputLine(line: String, attemptId: Long, protocol: AetherProtocol, onCodeRequired: () -> Unit) {
+    private suspend fun parseOutputLine(line: String, attemptId: Long, protocol: AetherProtocol, exitNodeMode: ExitNodeMode, onCodeRequired: () -> Unit) {
         if (currentAttemptId.get() != attemptId) return
 
         val lower = line.lowercase()
@@ -622,7 +622,7 @@ class AetherProcessRunner(private val context: Context) {
             val ip = match.groupValues.getOrNull(1)?.trim() ?: ""
             val country = match.groupValues.getOrNull(2)?.trim()?.uppercase() ?: ""
             val colo = match.groupValues.getOrNull(3)?.trim() ?: ""
-            if (ip.isNotEmpty() && country.length == 2) {
+            if (ip.isNotEmpty() && country.length == 2 && exitNodeMode == ExitNodeMode.DIRECT) {
                 IpInfoRepository.updateFromExitLine(ip, country, colo)
             }
         }
@@ -727,6 +727,7 @@ class AetherProcessRunner(private val context: Context) {
             (protocol != AetherProtocol.GOOL) && lower.contains("socks") && lower.contains("listening") -> {
                 quickRetryPending.set(false)
                 dataPlaneOk = true
+                SocksGate.setReady(SocksReadiness.PROBED_OK)
                 updateState(ConnectionStatus.DATAPLANE_VALIDATED, attemptId)
                 updateState(ConnectionStatus.SOCKS_READY, attemptId)
             }

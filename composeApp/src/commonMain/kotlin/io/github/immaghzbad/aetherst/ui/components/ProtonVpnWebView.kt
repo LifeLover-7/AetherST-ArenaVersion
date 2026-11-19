@@ -14,3 +14,15 @@ expect fun ProtonVpnWebView(
     onClose: () -> Unit
 )
 
+/**
+ * Platform-aware Firefox Account (FxA) In-App WebView component.
+ * Opens the official Mozilla Accounts sign-in flow inside an embedded WebView (supporting
+ * 2FA, CAPTCHA, and 6-digit email verification codes) and automatically intercepts the
+ * authenticated FxA sessionToken / OAuth token.
+ */
+@Composable
+expect fun FirefoxVpnWebView(
+    url: String = "https://accounts.firefox.com/signin",
+    onTokenExtracted: (email: String, sessionOrOAuthToken: String) -> Unit,
+    onClose: () -> Unit
+)

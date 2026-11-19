@@ -1,5 +1,6 @@
 package io.github.immaghzbad.aetherst.shared.ui.components
 
+import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.*
@@ -7,7 +8,9 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Login
+import androidx.compose.material.icons.filled.OpenInBrowser
 import androidx.compose.material.icons.filled.VpnKey
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -23,6 +26,7 @@ import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import io.github.immaghzbad.aetherst.shared.i18n.LocalAppStrings
 import io.github.immaghzbad.aetherst.shared.net.FirefoxVpnExitTunnel
+import io.github.immaghzbad.aetherst.shared.net.FxaVerificationRequiredException
 import io.github.immaghzbad.aetherst.shared.ui.theme.AppPalette
 import kotlinx.coroutines.launch
 
@@ -44,9 +48,44 @@ fun FirefoxVpnDialog(
     var country by remember { mutableStateOf(if (initialCountry.isNotBlank()) initialCountry else "us") }
     var port by remember { mutableStateOf(if (initialPort > 0) initialPort.toString() else "10810") }
 
+    var showFirefoxWebView by remember { mutableStateOf(false) }
+    var pendingSessionToken by remember { mutableStateOf<String?>(null) }
+    var emailVerifyCode by remember { mutableStateOf("") }
+
     var isSigningIn by remember { mutableStateOf(false) }
     var statusMessage by remember { mutableStateOf<String?>(null) }
     var isErrorStatus by remember { mutableStateOf(false) }
+
+    if (showFirefoxWebView) {
+        FirefoxVpnWebView(
+            url = "https://accounts.firefox.com/signin",
+            onTokenExtracted = { extractedEmail, rawSessionOrOAuth ->
+                showFirefoxWebView = false
+                if (extractedEmail.isNotBlank()) {
+                    account = extractedEmail
+                }
+                isSigningIn = true
+                isErrorStatus = false
+                statusMessage = "در حال تبدیل نشست فایرفاکس به توکن ProxyPass..."
+                scope.launch {
+                    val result = FirefoxVpnExitTunnel.exchangeSessionOrOAuthForProxyPass(
+                        rawTokenOrJson = rawSessionOrOAuth
+                    )
+                    isSigningIn = false
+                    result.onSuccess { fetchedToken ->
+                        token = fetchedToken
+                        pendingSessionToken = null
+                        isErrorStatus = false
+                        statusMessage = "✅ ورود از طریق WebView انجام شد و توکن ProxyPass با موفقیت دریافت گردید! روی Save بزنید."
+                    }.onFailure { err ->
+                        isErrorStatus = true
+                        statusMessage = "خطا در دریافت توکن از نشست WebView: ${err.message}"
+                    }
+                }
+            },
+            onClose = { showFirefoxWebView = false }
+        )
+    }
 
     Dialog(
         onDismissRequest = onDismiss,
@@ -98,14 +137,34 @@ fun FirefoxVpnDialog(
 
                 Spacer(modifier = Modifier.height(16.dp))
 
-                // Section 1: Direct Firefox Account Sign-In (Auto-fetch ProxyPass Token)
+                // Section 1: In-App WebView Sign-In (Recommended) + Direct Sign-In
                 Text(
-                    text = "1. Sign in with Firefox Account (Auto-Fetch 50GB ProxyPass)",
+                    text = "1. ورود به حساب فایرفاکس (دریافت خودکار توکن ProxyPass)",
                     color = Color(0xFFFF944D),
                     fontWeight = FontWeight.SemiBold,
                     fontSize = 12.sp
                 )
                 Spacer(modifier = Modifier.height(8.dp))
+
+                // Primary Recommended Button: In-App WebView Login
+                Button(
+                    onClick = { showFirefoxWebView = true },
+                    enabled = !isSigningIn,
+                    modifier = Modifier.fillMaxWidth().height(46.dp),
+                    shape = RoundedCornerShape(12.dp),
+                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFFF7139))
+                ) {
+                    Icon(Icons.Default.OpenInBrowser, null, modifier = Modifier.size(18.dp), tint = Color.White)
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text(
+                        text = "ورود با پنجره درون‌برنامه‌ای فایرفاکس (WebView)",
+                        fontSize = 12.5.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = Color.White
+                    )
+                }
+
+                Spacer(modifier = Modifier.height(10.dp))
 
                 IosInputField(
                     label = strings.EXIT_NODE_FIREFOX_ACCOUNT,
@@ -119,10 +178,10 @@ fun FirefoxVpnDialog(
                 Spacer(modifier = Modifier.height(8.dp))
 
                 IosInputField(
-                    label = "Firefox Account Password",
+                    label = "Firefox Account Password (ورود مستقیم)",
                     value = password,
                     onValueChange = { password = it },
-                    placeholder = "Enter password to fetch ProxyPass token",
+                    placeholder = "Enter password (or use WebView button above)",
                     testTag = "input_firefox_password",
                     modifier = Modifier.fillMaxWidth()
                 )
@@ -144,11 +203,18 @@ fun FirefoxVpnDialog(
                             result.onSuccess { fetchedToken ->
                                 token = fetchedToken
                                 password = ""
+                                pendingSessionToken = null
                                 isErrorStatus = false
                                 statusMessage = "✅ ProxyPass token fetched successfully! Tap Save to apply."
                             }.onFailure { err ->
-                                isErrorStatus = true
-                                statusMessage = err.message ?: "Sign-in failed."
+                                if (err is FxaVerificationRequiredException) {
+                                    pendingSessionToken = err.sessionTokenHex
+                                    isErrorStatus = false
+                                    statusMessage = "📩 کد تایید ۶ رقمی ارسال‌شده به ایمیل را در کادر زیر وارد کنید:"
+                                } else {
+                                    isErrorStatus = true
+                                    statusMessage = err.message ?: "Sign-in failed."
+                                }
                             }
                         }
                     },
@@ -168,7 +234,58 @@ fun FirefoxVpnDialog(
                     } else {
                         Icon(Icons.Default.Login, null, modifier = Modifier.size(16.dp))
                         Spacer(modifier = Modifier.width(8.dp))
-                        Text("Sign In & Fetch ProxyPass Token", fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                        Text("Direct Sign In with Email & Password", fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                    }
+                }
+
+                // 2-Step Email Verification Code Box (shown automatically when FxA requires OTP)
+                AnimatedVisibility(visible = pendingSessionToken != null) {
+                    Column(modifier = Modifier.fillMaxWidth().padding(top = 10.dp)) {
+                        IosInputField(
+                            label = "کد تایید ایمیل فایرفاکس (6-Digit Verification Code)",
+                            value = emailVerifyCode,
+                            onValueChange = { emailVerifyCode = it },
+                            placeholder = "123456",
+                            keyboardType = KeyboardType.Number,
+                            testTag = "input_firefox_otp",
+                            modifier = Modifier.fillMaxWidth()
+                        )
+                        Spacer(modifier = Modifier.height(8.dp))
+                        Button(
+                            onClick = {
+                                val sess = pendingSessionToken ?: return@Button
+                                if (isSigningIn) return@Button
+                                isSigningIn = true
+                                isErrorStatus = false
+                                statusMessage = "Verifying code & fetching ProxyPass token..."
+                                scope.launch {
+                                    val res = FirefoxVpnExitTunnel.verifySessionEmailCodeAndFetchToken(
+                                        sessionTokenHex = sess,
+                                        code = emailVerifyCode
+                                    )
+                                    isSigningIn = false
+                                    res.onSuccess { fetchedToken ->
+                                        token = fetchedToken
+                                        pendingSessionToken = null
+                                        emailVerifyCode = ""
+                                        password = ""
+                                        isErrorStatus = false
+                                        statusMessage = "✅ کد تایید شد و توکن ProxyPass دریافت گردید!"
+                                    }.onFailure { err ->
+                                        isErrorStatus = true
+                                        statusMessage = err.message ?: "Code verification failed."
+                                    }
+                                }
+                            },
+                            enabled = !isSigningIn && emailVerifyCode.trim().length >= 4,
+                            modifier = Modifier.fillMaxWidth().height(40.dp),
+                            shape = RoundedCornerShape(10.dp),
+                            colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF10B981))
+                        ) {
+                            Icon(Icons.Default.CheckCircle, null, modifier = Modifier.size(16.dp))
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text("تایید کد و دریافت توکن (Verify Code)", fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                        }
                     }
                 }
 

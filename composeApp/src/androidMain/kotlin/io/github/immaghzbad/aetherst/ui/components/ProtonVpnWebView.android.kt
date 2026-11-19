@@ -8,7 +8,6 @@ import android.view.ViewGroup
 import android.webkit.*
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.background
-import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -16,6 +15,7 @@ import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Shield
+import androidx.compose.material.icons.filled.VpnKey
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -33,6 +33,7 @@ import io.github.immaghzbad.aetherst.shared.data.LogRepository
 import io.github.immaghzbad.aetherst.shared.i18n.LocalAppStrings
 import io.github.immaghzbad.aetherst.shared.ui.theme.AppPalette
 import java.net.URLDecoder
+import java.util.concurrent.atomic.AtomicBoolean
 
 private class ProtonJavascriptBridge(private val onExtracted: (String) -> Unit) {
     @JavascriptInterface
@@ -48,6 +49,26 @@ private class ProtonJavascriptBridge(private val onExtracted: (String) -> Unit) 
     }
 }
 
+private class FirefoxJavascriptBridge(
+    private val onExtracted: (email: String, token: String) -> Unit
+) {
+    private val delivered = AtomicBoolean(false)
+
+    @JavascriptInterface
+    fun onFxaSessionExtracted(email: String?, token: String?) {
+        val cleanToken = token?.trim().orEmpty()
+        if (cleanToken.length >= 32 && delivered.compareAndSet(false, true)) {
+            LogRepository.i("[FirefoxWebView] Intercepted FxA session/OAuth token for ${email.orEmpty()}", "FirefoxVpn")
+            onExtracted(email?.trim().orEmpty(), cleanToken)
+        }
+    }
+
+    @JavascriptInterface
+    fun onLog(msg: String) {
+        LogRepository.i("[FirefoxWebView] JS: $msg", "FirefoxVpn")
+    }
+}
+
 @SuppressLint("SetJavaScriptEnabled")
 @Composable
 actual fun ProtonVpnWebView(
@@ -56,7 +77,6 @@ actual fun ProtonVpnWebView(
     onClose: () -> Unit
 ) {
     val strings = LocalAppStrings.current
-    val context = LocalContext.current
     var webViewRef by remember { mutableStateOf<WebView?>(null) }
     var pageProgress by remember { mutableStateOf(0) }
     var isLoading by remember { mutableStateOf(true) }
@@ -82,7 +102,6 @@ actual fun ProtonVpnWebView(
                 .background(AppPalette.surfaceRaised)
         ) {
             Column(modifier = Modifier.fillMaxSize()) {
-                // Top App Bar
                 Surface(
                     color = AppPalette.surfaceRaised,
                     shadowElevation = 4.dp,
@@ -161,7 +180,6 @@ actual fun ProtonVpnWebView(
                             }
                         }
 
-                        // Progress Indicator
                         AnimatedVisibility(visible = isLoading && pageProgress < 100) {
                             LinearProgressIndicator(
                                 progress = { pageProgress / 100f },
@@ -173,7 +191,6 @@ actual fun ProtonVpnWebView(
                     }
                 }
 
-                // WebView Container
                 Box(
                     modifier = Modifier
                         .weight(1f)
@@ -228,7 +245,6 @@ actual fun ProtonVpnWebView(
 
                                     override fun onPageFinished(view: WebView?, url: String?) {
                                         isLoading = false
-                                        // Inject hooks to intercept blob creation and downloads
                                         val injectScript = """
                                             (function() {
                                                 if (window._protonBlobHooked) return;
@@ -240,7 +256,6 @@ actual fun ProtonVpnWebView(
                                                     }
                                                 }
 
-                                                // Intercept clicks on anchor tags
                                                 document.addEventListener('click', function(e) {
                                                     var a = e.target.closest('a');
                                                     if (a && a.href) {
@@ -255,7 +270,6 @@ actual fun ProtonVpnWebView(
                                                     }
                                                 }, true);
 
-                                                // Intercept URL.createObjectURL for client-side generated .conf blobs
                                                 var origCreate = URL.createObjectURL;
                                                 URL.createObjectURL = function(blob) {
                                                     var bUrl = origCreate.apply(URL, arguments);
@@ -328,3 +342,321 @@ actual fun ProtonVpnWebView(
     }
 }
 
+@SuppressLint("SetJavaScriptEnabled")
+@Composable
+actual fun FirefoxVpnWebView(
+    url: String,
+    onTokenExtracted: (email: String, sessionOrOAuthToken: String) -> Unit,
+    onClose: () -> Unit
+) {
+    var webViewRef by remember { mutableStateOf<WebView?>(null) }
+    var pageProgress by remember { mutableStateOf(0) }
+    var isLoading by remember { mutableStateOf(true) }
+
+    PlatformBackHandler {
+        if (webViewRef?.canGoBack() == true) {
+            webViewRef?.goBack()
+        } else {
+            onClose()
+        }
+    }
+
+    Dialog(
+        onDismissRequest = onClose,
+        properties = DialogProperties(
+            usePlatformDefaultWidth = false,
+            decorFitsSystemWindows = false
+        )
+    ) {
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .background(AppPalette.surfaceRaised)
+        ) {
+            Column(modifier = Modifier.fillMaxSize()) {
+                // Top App Bar
+                Surface(
+                    color = AppPalette.surfaceRaised,
+                    shadowElevation = 4.dp,
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Column(modifier = Modifier.fillMaxWidth()) {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .statusBarsPadding()
+                                .padding(horizontal = 16.dp, vertical = 10.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.SpaceBetween
+                        ) {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                modifier = Modifier.weight(1f)
+                            ) {
+                                Box(
+                                    modifier = Modifier
+                                        .size(36.dp)
+                                        .clip(RoundedCornerShape(10.dp))
+                                        .background(Color(0xFFFF944D)),
+                                    contentAlignment = Alignment.Center
+                                ) {
+                                    Icon(
+                                        Icons.Default.VpnKey,
+                                        contentDescription = null,
+                                        tint = Color.White,
+                                        modifier = Modifier.size(20.dp)
+                                    )
+                                }
+                                Spacer(modifier = Modifier.width(12.dp))
+                                Column {
+                                    Row(verticalAlignment = Alignment.CenterVertically) {
+                                        Icon(
+                                            Icons.Default.Lock,
+                                            contentDescription = null,
+                                            tint = AppPalette.statusConnected,
+                                            modifier = Modifier.size(12.dp)
+                                        )
+                                        Spacer(modifier = Modifier.width(4.dp))
+                                        Text(
+                                            text = "ورود به حساب فایرفاکس (Mozilla Accounts)",
+                                            color = Color.White,
+                                            fontWeight = FontWeight.Bold,
+                                            fontSize = 14.sp
+                                        )
+                                    }
+                                    Text(
+                                        text = "وارد شوید؛ توکن پس از تایید ایمیل/کد به‌صورت خودکار دریافت می‌شود",
+                                        color = AppPalette.textSecondary,
+                                        fontSize = 10.5.sp,
+                                        maxLines = 1
+                                    )
+                                }
+                            }
+
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                IconButton(onClick = { webViewRef?.reload() }) {
+                                    Icon(
+                                        Icons.Default.Refresh,
+                                        contentDescription = "Reload",
+                                        tint = Color.White,
+                                        modifier = Modifier.size(20.dp)
+                                    )
+                                }
+                                IconButton(onClick = onClose) {
+                                    Icon(
+                                        Icons.Default.Close,
+                                        contentDescription = "Close",
+                                        tint = Color.White,
+                                        modifier = Modifier.size(22.dp)
+                                    )
+                                }
+                            }
+                        }
+
+                        AnimatedVisibility(visible = isLoading && pageProgress < 100) {
+                            LinearProgressIndicator(
+                                progress = { pageProgress / 100f },
+                                modifier = Modifier.fillMaxWidth().height(2.5.dp),
+                                color = Color(0xFFFF944D),
+                                trackColor = Color.Transparent
+                            )
+                        }
+                    }
+                }
+
+                Box(
+                    modifier = Modifier
+                        .weight(1f)
+                        .fillMaxWidth()
+                        .navigationBarsPadding()
+                ) {
+                    AndroidView(
+                        modifier = Modifier.fillMaxSize(),
+                        factory = { ctx ->
+                            WebView(ctx).apply {
+                                webViewRef = this
+                                layoutParams = ViewGroup.LayoutParams(
+                                    ViewGroup.LayoutParams.MATCH_PARENT,
+                                    ViewGroup.LayoutParams.MATCH_PARENT
+                                )
+
+                                settings.apply {
+                                    javaScriptEnabled = true
+                                    domStorageEnabled = true
+                                    databaseEnabled = true
+                                    useWideViewPort = true
+                                    loadWithOverviewMode = true
+                                    setSupportZoom(true)
+                                    builtInZoomControls = true
+                                    displayZoomControls = false
+                                    cacheMode = WebSettings.LOAD_DEFAULT
+                                    userAgentString = "Mozilla/5.0 (Android 14; Mobile; rv:132.0) Gecko/132.0 Firefox/132.0"
+                                }
+
+                                val cookieManager = CookieManager.getInstance()
+                                cookieManager.setAcceptCookie(true)
+                                cookieManager.setAcceptThirdPartyCookies(this, true)
+
+                                val bridge = FirefoxJavascriptBridge { email, extractedToken ->
+                                    (ctx as? Activity)?.runOnUiThread {
+                                        onTokenExtracted(email, extractedToken)
+                                    } ?: onTokenExtracted(email, extractedToken)
+                                }
+                                addJavascriptInterface(bridge, "FirefoxBridge")
+
+                                val fxaHookScript = """
+                                    (function() {
+                                        if (window._fxaHookInstalled) return;
+                                        window._fxaHookInstalled = true;
+                                        window._fxaPendingSession = null;
+                                        window._fxaPendingEmail = '';
+
+                                        function deliver(email, token) {
+                                            if (token && token.length >= 32 && window.FirefoxBridge) {
+                                                window.FirefoxBridge.onFxaSessionExtracted(email || window._fxaPendingEmail || '', token);
+                                            }
+                                        }
+
+                                        function inspectFxaStorage() {
+                                            try {
+                                                var raw = localStorage.getItem('__fxa_storage.accounts');
+                                                if (!raw) return;
+                                                var accounts = JSON.parse(raw);
+                                                for (var uid in accounts) {
+                                                    var acc = accounts[uid];
+                                                    if (acc && acc.sessionToken) {
+                                                        if (acc.email) window._fxaPendingEmail = acc.email;
+                                                        var onVerifyPage = location.pathname.indexOf('signin_token_code') !== -1 ||
+                                                                           location.pathname.indexOf('confirm') !== -1 ||
+                                                                           location.pathname.indexOf('totp') !== -1 ||
+                                                                           location.pathname.indexOf('unblock') !== -1;
+                                                        if (acc.verified === true || (!onVerifyPage && location.pathname.indexOf('/settings') === 0)) {
+                                                            deliver(acc.email || '', acc.sessionToken);
+                                                            return;
+                                                        }
+                                                    }
+                                                }
+                                            } catch (e) {}
+                                        }
+
+                                        // Hook window.fetch to intercept /v1/account/login, /v1/session/verify_code, /v1/oauth/token
+                                        var origFetch = window.fetch;
+                                        if (origFetch) {
+                                            window.fetch = function() {
+                                                var reqUrl = (arguments[0] && arguments[0].url) ? arguments[0].url : String(arguments[0] || '');
+                                                return origFetch.apply(this, arguments).then(function(response) {
+                                                    try {
+                                                        var clone = response.clone();
+                                                        clone.text().then(function(bodyText) {
+                                                            if (!bodyText) return;
+                                                            if (reqUrl.indexOf('/v1/account/login') !== -1) {
+                                                                var data = JSON.parse(bodyText);
+                                                                if (data && data.sessionToken) {
+                                                                    window._fxaPendingSession = data.sessionToken;
+                                                                    if (data.verified === true) {
+                                                                        deliver(window._fxaPendingEmail, data.sessionToken);
+                                                                    }
+                                                                }
+                                                            } else if (reqUrl.indexOf('/v1/session/verify_code') !== -1 ||
+                                                                       reqUrl.indexOf('/v1/totp/verify') !== -1 ||
+                                                                       reqUrl.indexOf('/v1/recovery_email/verify_code') !== -1) {
+                                                                if (response.ok && window._fxaPendingSession) {
+                                                                    deliver(window._fxaPendingEmail, window._fxaPendingSession);
+                                                                } else if (response.ok) {
+                                                                    setTimeout(inspectFxaStorage, 300);
+                                                                }
+                                                            } else if (reqUrl.indexOf('/v1/oauth/token') !== -1) {
+                                                                var oData = JSON.parse(bodyText);
+                                                                if (oData && oData.access_token) {
+                                                                    deliver(window._fxaPendingEmail, oData.access_token);
+                                                                }
+                                                            }
+                                                        }).catch(function(){});
+                                                    } catch (e) {}
+                                                    return response;
+                                                });
+                                            };
+                                        }
+
+                                        // Hook XMLHttpRequest as fallback
+                                        var origOpen = XMLHttpRequest.prototype.open;
+                                        var origSend = XMLHttpRequest.prototype.send;
+                                        XMLHttpRequest.prototype.open = function(method, u) {
+                                            this._fxaUrl = String(u || '');
+                                            return origOpen.apply(this, arguments);
+                                        };
+                                        XMLHttpRequest.prototype.send = function() {
+                                            var xhr = this;
+                                            xhr.addEventListener('load', function() {
+                                                try {
+                                                    var u = xhr._fxaUrl || '';
+                                                    if (u.indexOf('/v1/account/login') !== -1) {
+                                                        var data = JSON.parse(xhr.responseText);
+                                                        if (data && data.sessionToken) {
+                                                            window._fxaPendingSession = data.sessionToken;
+                                                            if (data.verified === true) {
+                                                                deliver(window._fxaPendingEmail, data.sessionToken);
+                                                            }
+                                                        }
+                                                    } else if (u.indexOf('/v1/session/verify_code') !== -1 || u.indexOf('/v1/totp/verify') !== -1) {
+                                                        if (xhr.status >= 200 && xhr.status < 300 && window._fxaPendingSession) {
+                                                            deliver(window._fxaPendingEmail, window._fxaPendingSession);
+                                                        }
+                                                    } else if (u.indexOf('/v1/oauth/token') !== -1) {
+                                                        var oData = JSON.parse(xhr.responseText);
+                                                        if (oData && oData.access_token) {
+                                                            deliver(window._fxaPendingEmail, oData.access_token);
+                                                        }
+                                                    }
+                                                } catch (e) {}
+                                            });
+                                            return origSend.apply(this, arguments);
+                                        };
+
+                                        // Track email input field
+                                        document.addEventListener('input', function(e) {
+                                            if (e.target && (e.target.type === 'email' || e.target.name === 'email')) {
+                                                window._fxaPendingEmail = e.target.value || '';
+                                            }
+                                        }, true);
+
+                                        setInterval(inspectFxaStorage, 900);
+                                        inspectFxaStorage();
+                                    })();
+                                """.trimIndent()
+
+                                webChromeClient = object : WebChromeClient() {
+                                    override fun onProgressChanged(view: WebView?, newProgress: Int) {
+                                        pageProgress = newProgress
+                                        isLoading = newProgress < 100
+                                        if (newProgress >= 30) {
+                                            view?.evaluateJavascript(fxaHookScript, null)
+                                        }
+                                    }
+                                }
+
+                                webViewClient = object : WebViewClient() {
+                                    override fun onPageStarted(view: WebView?, url: String?, favicon: Bitmap?) {
+                                        isLoading = true
+                                        view?.evaluateJavascript(fxaHookScript, null)
+                                    }
+
+                                    override fun onPageFinished(view: WebView?, url: String?) {
+                                        isLoading = false
+                                        view?.evaluateJavascript(fxaHookScript, null)
+                                    }
+
+                                    override fun shouldOverrideUrlLoading(view: WebView?, request: WebResourceRequest?): Boolean {
+                                        return false
+                                    }
+                                }
+
+                                loadUrl(url)
+                            }
+                        }
+                    )
+                }
+            }
+        }
+    }
+}

@@ -400,7 +400,7 @@ class AetherProcessRunner(private val context: PlatformContext) {
             }
             while (isActive && currentAttemptId.get() == attemptId) {
                 val line = proc.readLine() ?: break
-                parseOutputLine(line, attemptId, config.protocol, onCodeRequired)
+                parseOutputLine(line, attemptId, config.protocol, config.exitNodeMode, onCodeRequired)
             }
             inputJob.cancel()
             val exitCode = proc.waitFor()
@@ -418,7 +418,7 @@ class AetherProcessRunner(private val context: PlatformContext) {
         }
     }
 
-    private fun parseOutputLine(line: String, attemptId: Long, protocol: AetherProtocol, onCodeRequired: () -> Unit) {
+    private fun parseOutputLine(line: String, attemptId: Long, protocol: AetherProtocol, exitNodeMode: ExitNodeMode, onCodeRequired: () -> Unit) {
         if (currentAttemptId.get() != attemptId) return
         val lower = line.lowercase()
         when {
@@ -431,7 +431,7 @@ class AetherProcessRunner(private val context: PlatformContext) {
             val ip = match.groupValues.getOrNull(1)?.trim() ?: ""
             val country = match.groupValues.getOrNull(2)?.trim()?.uppercase() ?: ""
             val colo = match.groupValues.getOrNull(3)?.trim() ?: ""
-            if (ip.isNotEmpty() && country.length == 2) {
+            if (ip.isNotEmpty() && country.length == 2 && exitNodeMode == ExitNodeMode.DIRECT) {
                 IpInfoRepository.updateFromExitLine(ip, country, colo)
             }
         }

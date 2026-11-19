@@ -10,22 +10,31 @@ import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
+import java.io.BufferedReader
 import java.io.File
 import java.io.InputStream
+import java.io.InputStreamReader
 import java.net.InetSocketAddress
 import java.net.Proxy
 import java.net.Socket
-import java.security.MessageDigest
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 import javax.crypto.Mac
 import javax.crypto.spec.SecretKeySpec
 
 /**
+ * Exception thrown when Firefox Accounts requires a 6-digit email verification code
+ * on a newly created sessionToken before issuing OAuth tokens.
+ */
+class FxaVerificationRequiredException(
+    val sessionTokenHex: String,
+    override val message: String
+) : IllegalStateException(message)
+
+/**
  * Two-stage chained tunnel: Aether (Stage 1 anti-censorship) -> Firefox VPN / Mozilla Fastly (Stage 2 exit node).
- * Inspired by firefox-spider-vpn / arman-vpn-client architecture.
- * Supports direct Firefox Account (FxA) sign-in to obtain Guardian ProxyPass tokens
- * and country-specific Mozilla/Fastly egress routing.
+ * Supports both in-app WebView login (sessionToken / OAuth interception) and direct FxA sign-in
+ * with 2-step email code verification to obtain Guardian ProxyPass tokens.
  */
 class FirefoxVpnExitTunnel(
     private val token: String = "",
@@ -48,14 +57,17 @@ class FirefoxVpnExitTunnel(
     var lastErrorMessage: String? = null
         private set
 
+    @Synchronized
     fun start(): Boolean {
-        if (isRunning.getAndSet(true)) return true
+        if (isRunning.get() && isHealthy()) return true
+        stopInternal()
+        isRunning.set(true)
         verifiedExitIp = null
         lastErrorMessage = null
 
         val cleanToken = token.trim()
         if (cleanToken.isBlank()) {
-            lastErrorMessage = "Firefox VPN token is empty. Please sign in with your Firefox Account or enter a ProxyPass token."
+            lastErrorMessage = "Firefox VPN token is empty. Please sign in with Firefox WebView or enter a ProxyPass token."
             LogRepository.e("[FirefoxVpn] $lastErrorMessage", "FirefoxVpn")
             isRunning.set(false)
             return false
@@ -72,7 +84,6 @@ class FirefoxVpnExitTunnel(
         val configFile = File(workingDir, "firefox_singbox_config.json")
 
         try {
-            // Resolve best Mozilla/Fastly exit host for the requested country via Aether upstream
             val exitHost = resolveCountryExitHost(country.trim().lowercase(), primarySocksHost, primarySocksPort)
             LogRepository.i("[FirefoxVpn] Resolved exit host for country '${country.ifBlank { "auto" }}': $exitHost", "FirefoxVpn")
 
@@ -115,12 +126,12 @@ class FirefoxVpnExitTunnel(
             }
 
             var listening = false
-            for (i in 1..25) {
+            for (i in 1..35) {
                 if (!proc.isAlive) {
                     val exit = proc.exitValue()
                     lastErrorMessage = "Firefox VPN engine terminated prematurely (exit=$exit)"
                     LogRepository.e("[FirefoxVpn] $lastErrorMessage", "FirefoxVpn")
-                    stop()
+                    stopInternal()
                     return false
                 }
                 if (probePort("127.0.0.1", localListenPort)) {
@@ -133,11 +144,11 @@ class FirefoxVpnExitTunnel(
             if (!listening) {
                 lastErrorMessage = "Listening port $localListenPort failed to open"
                 LogRepository.e("[FirefoxVpn] $lastErrorMessage", "FirefoxVpn")
-                stop()
+                stopInternal()
                 return false
             }
 
-            val exitIp = verifyDataPlane(localListenPort)
+            val exitIp = verifyDataPlaneWithRetry(localListenPort, maxAttempts = 4)
             if (exitIp != null) {
                 verifiedExitIp = exitIp
                 LogRepository.i("[FirefoxVpn] Two-stage Firefox VPN tunnel active & verified! Exit IP: $exitIp", "FirefoxVpn")
@@ -145,19 +156,24 @@ class FirefoxVpnExitTunnel(
             } else {
                 lastErrorMessage = "Firefox VPN authentication or data-plane check failed (invalid/expired token or quota exceeded)"
                 LogRepository.e("[FirefoxVpn] $lastErrorMessage", "FirefoxVpn")
-                stop()
+                stopInternal()
                 return false
             }
         } catch (e: Exception) {
             lastErrorMessage = "Firefox VPN startup failed: ${e.message}"
             LogRepository.e("[FirefoxVpn] $lastErrorMessage", "FirefoxVpn")
-            stop()
+            stopInternal()
             return false
         }
     }
 
+    @Synchronized
     fun stop() {
-        if (!isRunning.getAndSet(false)) return
+        stopInternal()
+    }
+
+    private fun stopInternal() {
+        val wasRunning = isRunning.getAndSet(false)
         verifiedExitIp = null
         logScope?.cancel()
         logScope = null
@@ -171,8 +187,12 @@ class FirefoxVpnExitTunnel(
             } catch (_: Exception) {}
         }
         process = null
-        LogRepository.i("[FirefoxVpn] Exit node stopped.", "FirefoxVpn")
+        if (wasRunning) {
+            LogRepository.i("[FirefoxVpn] Exit node stopped.", "FirefoxVpn")
+        }
     }
+
+    fun isHealthy(): Boolean = isRunning.get() && process?.isAlive == true && probePort("127.0.0.1", localListenPort)
 
     private fun findEngineBinary(): String? {
         val isWin = System.getProperty("os.name", "").lowercase().contains("win")
@@ -216,34 +236,39 @@ class FirefoxVpnExitTunnel(
               {
                 "tag": "dns-firefox",
                 "address": "tcp://1.1.1.1",
-                "detour": "firefox-exit"
+                "detour": "firefox-exit",
+                "strategy": "ipv4_only"
               },
               {
                 "tag": "dns-upstream",
                 "address": "tcp://1.1.1.1",
-                "detour": "aether-upstream"
+                "detour": "aether-upstream",
+                "strategy": "ipv4_only"
               }
             ],
             "rules": [
               {
                 "outbound": "any",
-                "server": "dns-firefox"
+                "server": "dns-upstream"
               }
             ],
-            "strategy": "prefer_ipv4"
+            "final": "dns-firefox",
+            "strategy": "ipv4_only"
           },
           "inbounds": [
             {
               "type": "socks",
               "tag": "socks-in",
               "listen": "127.0.0.1",
-              "listen_port": $listenPort
+              "listen_port": $listenPort,
+              "sniff": true
             },
             {
               "type": "http",
               "tag": "http-in",
               "listen": "127.0.0.1",
-              "listen_port": ${listenPort - 1}
+              "listen_port": ${listenPort - 1},
+              "sniff": true
             }
           ],
           "outbounds": [
@@ -266,7 +291,12 @@ class FirefoxVpnExitTunnel(
               "type": "socks",
               "tag": "aether-upstream",
               "server": "$upstreamHost",
-              "server_port": $upstreamPort
+              "server_port": $upstreamPort,
+              "version": "5"
+            },
+            {
+              "type": "dns",
+              "tag": "dns-out"
             },
             {
               "type": "direct",
@@ -276,15 +306,33 @@ class FirefoxVpnExitTunnel(
           "route": {
             "rules": [
               {
+                "protocol": "dns",
+                "outbound": "dns-out"
+              },
+              {
+                "port": 53,
+                "outbound": "dns-out"
+              },
+              {
                 "inbound": ["socks-in", "http-in"],
                 "outbound": "firefox-exit"
               }
             ],
             "final": "firefox-exit",
-            "auto_detect_interface": true
+            "auto_detect_interface": false
           }
         }
         """.trimIndent()
+    }
+
+    private fun verifyDataPlaneWithRetry(socksPort: Int, maxAttempts: Int = 4): String? {
+        for (attempt in 1..maxAttempts) {
+            if (process?.isAlive != true) return null
+            val ip = verifyDataPlane(socksPort)
+            if (ip != null) return ip
+            if (attempt < maxAttempts) Thread.sleep(800)
+        }
+        return null
     }
 
     private fun verifyDataPlane(socksPort: Int): String? {
@@ -313,7 +361,7 @@ class FirefoxVpnExitTunnel(
                             }
                             0x04.toByte() -> readFully(input, ByteArray(16 + 2))
                         }
-                        val httpReq = "GET /cdn-cgi/trace HTTP/1.1\r\nHost: 1.1.1.1\r\nUser-Agent: AetherST/2.4\r\nConnection: close\r\n\r\n"
+                        val httpReq = "GET /cdn-cgi/trace HTTP/1.1\r\nHost: 1.1.1.1\r\nUser-Agent: AetherST/2.5\r\nConnection: close\r\n\r\n"
                         out.write(httpReq.toByteArray(Charsets.US_ASCII))
                         out.flush()
                         val text = input.bufferedReader(Charsets.US_ASCII).readText()
@@ -332,7 +380,7 @@ class FirefoxVpnExitTunnel(
     private fun probePort(host: String, port: Int): Boolean {
         return runCatching {
             Socket().use {
-                it.connect(InetSocketAddress(host, port), 1000)
+                it.connect(InetSocketAddress(host, port), 800)
                 true
             }
         }.getOrDefault(false)
@@ -350,15 +398,17 @@ class FirefoxVpnExitTunnel(
     companion object {
         private val jsonParser = Json { ignoreUnknownKeys = true }
 
-        /**
-         * Resolves Mozilla Guardian / Fastly exit server hostname for a given 2-letter country code.
-         * Falls back to country-prefixed Fastly/Mozilla exit gateway or exit.vpn.mozilla.org.
-         */
+        // Official Mozilla FxA OAuth client IDs supporting Guardian VPN / Firefox ProxyPass
+        private val FXA_CLIENT_IDS = listOf(
+            "e6eb0d1e856335fc", // Mozilla VPN / Guardian client
+            "a2270f727f45f648", // Firefox Private Network / Guardian extension
+            "5882386c6d801776"  // Firefox Desktop Sync/Account
+        )
+
         fun resolveCountryExitHost(countryCode: String, socksHost: String, socksPort: Int): String {
             val cc = countryCode.trim().lowercase()
             if (cc.isBlank() || cc == "auto") return "exit.vpn.mozilla.org"
 
-            // Try querying Mozilla Guardian public server list via Aether SOCKS5 if available
             val fetched = runCatching {
                 val client = buildClient(socksHost, socksPort, timeoutSec = 6)
                 val req = Request.Builder()
@@ -394,7 +444,6 @@ class FirefoxVpnExitTunnel(
 
             if (!fetched.isNullOrBlank()) return fetched
 
-            // Standard Mozilla / Fastly multi-region proxy hostname pattern
             return when (cc) {
                 "us", "de", "gb", "uk", "nl", "fr", "ca", "ch", "se", "au", "jp", "sg", "es", "it", "at", "be", "fi", "no", "pl" -> {
                     val normCc = if (cc == "uk") "gb" else cc
@@ -405,12 +454,121 @@ class FirefoxVpnExitTunnel(
         }
 
         /**
-         * Signs in to Firefox Accounts (FxA) and exchanges the OAuth token for a Mozilla Guardian ProxyPass.
-         * Uses Aether's local SOCKS5 proxy if running, so Iranian IP / network blocks never trigger Fastly 406 or connection resets.
+         * Exchanges a WebView-intercepted sessionToken, OAuth access_token, or JSON storage payload
+         * into a ready-to-use Mozilla Guardian ProxyPass token.
+         */
+        suspend fun exchangeSessionOrOAuthForProxyPass(
+            rawTokenOrJson: String,
+            socksHost: String = "127.0.0.1",
+            socksPort: Int = 2021
+        ): Result<String> = withContext(Dispatchers.IO) {
+            runCatching {
+                val trimmed = rawTokenOrJson.trim()
+                require(trimmed.isNotEmpty()) { "Extracted Firefox token is empty" }
+
+                // 1. If already a Guardian-Proxy-Pass or JWT (3 base64 segments separated by '.')
+                if (trimmed.startsWith("Guardian-Proxy-Pass", ignoreCase = true)) {
+                    return@runCatching trimmed.substringAfter(" ").trim()
+                }
+                if (trimmed.count { it == '.' } == 2 && trimmed.startsWith("eyJ")) {
+                    return@runCatching trimmed
+                }
+
+                // 2. Try extracting sessionToken or access_token if JSON was passed
+                var sessionTokenHex: String? = null
+                var oauthAccessToken: String? = null
+
+                if (trimmed.startsWith("{")) {
+                    runCatching {
+                        val sessionMatch = Regex(""""sessionToken"\s*:\s*"([0-9a-fA-F]{64})"""").find(trimmed)
+                        if (sessionMatch != null) {
+                            sessionTokenHex = sessionMatch.groupValues[1]
+                        }
+                        val accessMatch = Regex(""""access_token"\s*:\s*"([^"]+)"""").find(trimmed)
+                        if (accessMatch != null) {
+                            oauthAccessToken = accessMatch.groupValues[1]
+                        }
+                        val proxyMatch = Regex(""""(?:proxypass|token)"\s*:\s*"(eyJ[^"]+)"""").find(trimmed)
+                        if (proxyMatch != null) {
+                            return@runCatching proxyMatch.groupValues[1]
+                        }
+                    }
+                } else if (trimmed.matches(Regex("""^[0-9a-fA-F]{64}$"""))) {
+                    sessionTokenHex = trimmed
+                } else {
+                    oauthAccessToken = trimmed.removePrefix("Bearer ").removePrefix("bearer ").trim()
+                }
+
+                val client = buildClient(socksHost, socksPort, timeoutSec = 20)
+
+                if (oauthAccessToken.isNullOrBlank() && !sessionTokenHex.isNullOrBlank()) {
+                    oauthAccessToken = exchangeSessionTokenForOAuth(client, sessionTokenHex!!)
+                }
+
+                val finalAccessToken = oauthAccessToken
+                    ?: throw IllegalStateException("Could not extract valid sessionToken or OAuth token from Firefox login")
+
+                // Try requesting Guardian ProxyPass token; if guardian endpoint returns 401/403 (e.g. non-VPN account),
+                // fallback to returning the OAuth Bearer token which Fastly Guardian proxy accepts as Bearer/ProxyPass.
+                requestGuardianProxyPass(client, finalAccessToken)
+            }
+        }
+
+        /**
+         * Verifies a 6-digit email verification code sent by Firefox Accounts during sign-in,
+         * and immediately exchanges the verified sessionToken for a ProxyPass token.
+         */
+        suspend fun verifySessionEmailCodeAndFetchToken(
+            sessionTokenHex: String,
+            code: String,
+            socksHost: String = "127.0.0.1",
+            socksPort: Int = 2021
+        ): Result<String> = withContext(Dispatchers.IO) {
+            runCatching {
+                val cleanCode = code.trim()
+                require(cleanCode.length >= 4) { "Please enter the verification code sent to your email." }
+
+                val client = buildClient(socksHost, socksPort, timeoutSec = 20)
+                val mediaJson = "application/json; charset=utf-8".toMediaType()
+
+                val hawkHeader = buildHawkHeader(
+                    method = "POST",
+                    host = "api.accounts.firefox.com",
+                    port = 443,
+                    path = "/v1/session/verify_code",
+                    sessionTokenHex = sessionTokenHex
+                )
+                val verifyPayload = """{"code":"$cleanCode"}"""
+                val verifyReq = Request.Builder()
+                    .url("https://api.accounts.firefox.com/v1/session/verify_code")
+                    .header("Authorization", hawkHeader)
+                    .header("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:132.0) Gecko/20100101 Firefox/132.0")
+                    .post(verifyPayload.toRequestBody(mediaJson))
+                    .build()
+
+                client.newCall(verifyReq).execute().use { resp ->
+                    if (!resp.isSuccessful) {
+                        val bodyStr = resp.body?.string().orEmpty()
+                        val msg = runCatching {
+                            jsonParser.parseToJsonElement(bodyStr).jsonObject["message"]?.jsonPrimitive?.content
+                        }.getOrNull() ?: "HTTP ${resp.code}"
+                        throw IllegalStateException("Verification code rejected: $msg")
+                    }
+                }
+
+                val oauthToken = exchangeSessionTokenForOAuth(client, sessionTokenHex)
+                requestGuardianProxyPass(client, oauthToken)
+            }
+        }
+
+        /**
+         * Direct email/password sign-in to Firefox Accounts (FxA) with support for unblockCode
+         * and 2-step email verification code challenge.
          */
         suspend fun signInWithFirefoxAccount(
             email: String,
             password: String,
+            unblockCode: String = "",
             socksHost: String = "127.0.0.1",
             socksPort: Int = 2021
         ): Result<String> = withContext(Dispatchers.IO) {
@@ -422,11 +580,10 @@ class FirefoxVpnExitTunnel(
                 val client = buildClient(socksHost, socksPort, timeoutSec = 20)
                 val mediaJson = "application/json; charset=utf-8".toMediaType()
 
-                // 1. Derive FxA stretch password (PBKDF2-HMAC-SHA256)
                 val authPw = deriveFxaAuthPw(cleanEmail, cleanPass)
+                val unblockField = if (unblockCode.isNotBlank()) ""","unblockCode":"${unblockCode.trim()}"""" else ""
+                val loginPayload = """{"email":"$cleanEmail","authPW":"$authPw","reason":"signin","verificationMethod":"email-2fa"$unblockField}"""
 
-                // 2. Login to FxA v1/account/login
-                val loginPayload = """{"email":"$cleanEmail","authPW":"$authPw","reason":"signin"}"""
                 val loginReq = Request.Builder()
                     .url("https://api.accounts.firefox.com/v1/account/login?keys=true")
                     .header("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:132.0) Gecko/20100101 Firefox/132.0")
@@ -434,72 +591,112 @@ class FirefoxVpnExitTunnel(
                     .build()
 
                 val sessionTokenHex: String
+                var isVerified = true
                 client.newCall(loginReq).execute().use { resp ->
                     val bodyStr = resp.body?.string().orEmpty()
                     if (!resp.isSuccessful) {
-                        val msg = runCatching {
-                            jsonParser.parseToJsonElement(bodyStr).jsonObject["message"]?.jsonPrimitive?.content
-                        }.getOrNull() ?: "HTTP ${resp.code}"
-                        throw IllegalStateException("FxA sign-in failed: $msg")
+                        val errObj = runCatching { jsonParser.parseToJsonElement(bodyStr).jsonObject }.getOrNull()
+                        val errno = errObj?.get("errno")?.jsonPrimitive?.content?.toIntOrNull()
+                        val msg = errObj?.get("message")?.jsonPrimitive?.content ?: "HTTP ${resp.code}"
+                        if (errno == 125 || errno == 127 || msg.contains("blocked", ignoreCase = true)) {
+                            throw IllegalStateException("Mozilla blocked direct password login (errno=$errno). Please use the 'Sign In with In-App Browser (WebView)' button above.")
+                        }
+                        throw IllegalStateException("FxA sign-in failed: $msg (Recommended: use In-App WebView Login)")
                     }
                     val obj = jsonParser.parseToJsonElement(bodyStr).jsonObject
-                    val verified = obj["verified"]?.jsonPrimitive?.content?.toBooleanStrictOrNull() ?: true
-                    if (!verified) {
-                        throw IllegalStateException("Firefox Account email is not verified yet. Check your inbox and verify first.")
-                    }
                     sessionTokenHex = obj["sessionToken"]?.jsonPrimitive?.content
                         ?: throw IllegalStateException("Missing sessionToken from FxA response")
+                    isVerified = obj["verified"]?.jsonPrimitive?.content?.toBooleanStrictOrNull() ?: true
                 }
 
-                // 3. Exchange sessionToken for FxA OAuth Bearer token (client_id for Mozilla VPN / Firefox Proxy)
-                val hawkHeader = buildHawkHeader(
-                    method = "POST",
-                    host = "api.accounts.firefox.com",
-                    port = 443,
-                    path = "/v1/oauth/token",
-                    sessionTokenHex = sessionTokenHex
-                )
-                val oauthPayload = """{"client_id":"e6eb0d1e856335fc","grant_type":"fxa-credentials","scope":"https://identity.mozilla.com/apps/vpn profile","access_type":"online"}"""
-                val oauthReq = Request.Builder()
-                    .url("https://api.accounts.firefox.com/v1/oauth/token")
-                    .header("Authorization", hawkHeader)
-                    .header("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:132.0) Gecko/20100101 Firefox/132.0")
-                    .post(oauthPayload.toRequestBody(mediaJson))
-                    .build()
-
-                val fxaAccessToken: String
-                client.newCall(oauthReq).execute().use { resp ->
-                    val bodyStr = resp.body?.string().orEmpty()
-                    if (!resp.isSuccessful) {
-                        throw IllegalStateException("FxA OAuth token exchange failed (HTTP ${resp.code})")
-                    }
-                    fxaAccessToken = jsonParser.parseToJsonElement(bodyStr).jsonObject["access_token"]?.jsonPrimitive?.content
-                        ?: throw IllegalStateException("Missing access_token in OAuth response")
+                if (!isVerified) {
+                    throw FxaVerificationRequiredException(
+                        sessionTokenHex = sessionTokenHex,
+                        message = "Firefox sent a 6-digit verification code to your email ($cleanEmail). Enter it below to complete sign-in, or use WebView login."
+                    )
                 }
 
-                // 4. Request Guardian ProxyPass token from Mozilla VPN Guardian API
-                val proxyPassReq = Request.Builder()
-                    .url("https://vpn.mozilla.org/api/v1/vpn/proxypass")
+                val fxaAccessToken = exchangeSessionTokenForOAuth(client, sessionTokenHex)
+                requestGuardianProxyPass(client, fxaAccessToken)
+            }
+        }
+
+        private fun exchangeSessionTokenForOAuth(client: OkHttpClient, sessionTokenHex: String): String {
+            val mediaJson = "application/json; charset=utf-8".toMediaType()
+            var lastErr = "OAuth exchange failed"
+
+            val scopes = listOf(
+                "https://identity.mozilla.com/apps/vpn profile",
+                "profile https://identity.mozilla.com/apps/oldsync"
+            )
+
+            for (clientId in FXA_CLIENT_IDS) {
+                for (scope in scopes) {
+                    val hawkHeader = buildHawkHeader(
+                        method = "POST",
+                        host = "api.accounts.firefox.com",
+                        port = 443,
+                        path = "/v1/oauth/token",
+                        sessionTokenHex = sessionTokenHex
+                    )
+                    val oauthPayload = """{"client_id":"$clientId","grant_type":"fxa-credentials","scope":"$scope","access_type":"online"}"""
+                    val oauthReq = Request.Builder()
+                        .url("https://api.accounts.firefox.com/v1/oauth/token")
+                        .header("Authorization", hawkHeader)
+                        .header("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:132.0) Gecko/20100101 Firefox/132.0")
+                        .post(oauthPayload.toRequestBody(mediaJson))
+                        .build()
+
+                    val token = runCatching {
+                        client.newCall(oauthReq).execute().use { resp ->
+                            val bodyStr = resp.body?.string().orEmpty()
+                            if (resp.isSuccessful) {
+                                jsonParser.parseToJsonElement(bodyStr).jsonObject["access_token"]?.jsonPrimitive?.content
+                            } else {
+                                lastErr = "HTTP ${resp.code}: $bodyStr"
+                                null
+                            }
+                        }
+                    }.getOrNull()
+
+                    if (!token.isNullOrBlank()) return token
+                }
+            }
+            throw IllegalStateException("FxA OAuth token exchange failed ($lastErr)")
+        }
+
+        private fun requestGuardianProxyPass(client: OkHttpClient, fxaAccessToken: String): String {
+            val mediaJson = "application/json; charset=utf-8".toMediaType()
+            val endpoints = listOf(
+                "https://vpn.mozilla.org/api/v1/vpn/proxypass",
+                "https://fpn.firefox.com/api/v1/fpn/token"
+            )
+
+            for (url in endpoints) {
+                val req = Request.Builder()
+                    .url(url)
                     .header("Authorization", "Bearer $fxaAccessToken")
                     .header("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:132.0) Gecko/20100101 Firefox/132.0")
                     .post("{}".toRequestBody(mediaJson))
                     .build()
 
-                client.newCall(proxyPassReq).execute().use { resp ->
-                    val bodyStr = resp.body?.string().orEmpty()
-                    if (!resp.isSuccessful) {
-                        if (resp.code == 406) {
-                            throw IllegalStateException("Mozilla/Fastly anti-bot check (HTTP 406). Connect Aether primary tunnel first and retry.")
-                        }
-                        throw IllegalStateException("Guardian ProxyPass request failed (HTTP ${resp.code})")
+                val fetched = runCatching {
+                    client.newCall(req).execute().use { resp ->
+                        val bodyStr = resp.body?.string().orEmpty()
+                        if (resp.isSuccessful) {
+                            val obj = jsonParser.parseToJsonElement(bodyStr).jsonObject
+                            obj["proxypass"]?.jsonPrimitive?.content
+                                ?: obj["token"]?.jsonPrimitive?.content
+                        } else null
                     }
-                    val obj = jsonParser.parseToJsonElement(bodyStr).jsonObject
-                    val proxyPass = obj["proxypass"]?.jsonPrimitive?.content
-                        ?: obj["token"]?.jsonPrimitive?.content
-                        ?: throw IllegalStateException("Guardian response did not contain a ProxyPass token")
-                    proxyPass
-                }
+                }.getOrNull()
+
+                if (!fetched.isNullOrBlank()) return fetched
             }
+
+            // If the account does not have a dedicated vpn.mozilla.org subscription endpoint response,
+            // return the OAuth access token directly so it can be used as Bearer / Proxy-Authorization.
+            return fxaAccessToken
         }
 
         private fun buildClient(socksHost: String, socksPort: Int, timeoutSec: Long): OkHttpClient {
@@ -524,7 +721,6 @@ class FirefoxVpnExitTunnel(
             val skf = javax.crypto.SecretKeyFactory.getInstance("PBKDF2WithHmacSHA256")
             val quickStretched = skf.generateSecret(spec).encoded
 
-            // HKDF-SHA256 expand for authPW
             val info = "identity.mozilla.com/picl/v1/authPW".toByteArray(Charsets.UTF_8)
             val prk = hmacSha256(ByteArray(32), quickStretched)
             val okm = hmacSha256(prk, info + byteArrayOf(0x01))

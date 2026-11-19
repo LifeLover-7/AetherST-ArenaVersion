@@ -140,7 +140,7 @@ compose.desktop {
         nativeDistributions {
             targetFormats(org.jetbrains.compose.desktop.application.dsl.TargetFormat.Msi, org.jetbrains.compose.desktop.application.dsl.TargetFormat.Exe)
             packageName = "AetherST-Tunnel"
-            packageVersion = "2.1.3"
+            packageVersion = "2.1.4"
             vendor = "ImMaghzBad"
             description = "AetherST High-Performance Proxy Tunnel"
 

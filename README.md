@@ -1,149 +1,118 @@
 <p align="center">
-  <img src="https://img.shields.io/badge/AetherST-Tunnel-007AFF?style=for-the-badge&logo=shield&logoColor=white" alt="AetherST Logo" width="200">
+  <img src="https://img.shields.io/badge/AetherST-Tunnel-007AFF?style=for-the-badge&logo=shield&logoColor=white" alt="AetherST Logo" width="220">
 </p>
 
 <h1 align="center">AetherST Tunnel</h1>
 
 <p align="center">
-  <strong>Advanced, High-Performance Censorship Circumvention Client for Android & Windows</strong>
+  <strong>Next-Generation, High-Performance Censorship Circumvention Client for Android & Windows</strong>
 </p>
 
 <p align="center">
-  <a href="https://github.com/LifeLover-7/AetherST/releases">
-    <img src="https://img.shields.io/github/v/release/LifeLover-7/AetherST?style=for-the-badge&color=007AFF" alt="Release">
+  <a href="https://github.com/LifeLover-7/AetherST-Private/releases">
+    <img src="https://img.shields.io/badge/Release-v2.1.4-007AFF?style=for-the-badge" alt="Release">
   </a>
-  <a href="LICENSE">
+  <a href="https://github.com/LifeLover-7/AetherST-Private">
     <img src="https://img.shields.io/badge/License-Proprietary-orange?style=for-the-badge" alt="License">
   </a>
-  <a href="https://github.com/LifeLover-7/AetherST/stargazers">
-    <img src="https://img.shields.io/github/stars/LifeLover-7/AetherST?style=for-the-badge&color=FFD700" alt="Stars">
-  </a>
-  <img src="https://img.shields.io/badge/Platform-Android-3DDC84?style=for-the-badge&logo=android&logoColor=white" alt="Platform Android">
-  <img src="https://img.shields.io/badge/Platform-Windows-0078D4?style=for-the-badge&logo=windows&logoColor=white" alt="Platform Windows">
+  <img src="https://img.shields.io/badge/Platform-Android_&_Windows-0078D4?style=for-the-badge&logo=windows&logoColor=white" alt="Platforms">
+  <img src="https://img.shields.io/badge/Kotlin-Multiplatform-7F52FF?style=for-the-badge&logo=kotlin&logoColor=white" alt="Kotlin Multiplatform">
 </p>
 
 ---
 
-## 📖 Overview
+## 📖 معرفی و نمای کلی (Overview)
 
-**AetherST Tunnel** is a production-grade VPN and Proxy client for Android and Windows, meticulously engineered to provide secure and stable connectivity in highly restricted network environments. By combining the power of the **Aether Core** with proven tunnel engines, AetherST offers a robust solution against Deep Packet Inspection (DPI) and protocol-based blocking across multiple platforms.
+**AetherST Tunnel** یک کلاینت فوق‌پیشرفته، بسیار پایدار و با کارایی بالا جهت دورزدن فیلترینگ سخت‌گیرانه، اختلالات عمیق شبکه (DPI) و مسدودسازی‌های پروتکل‌محور در سیستم‌عامل‌های **اندروید (Android)** و **ویندوز (Windows)** است.
 
-## 📱 Versions & Platforms
-
-- **Android Client:** `v1.7.1` (Latest Stable)
-- **Windows Client:** `v1.1.1` (First Public Release)
-
-## ✨ Features
-
-- 🛡️ **Stealth Connectivity:** Specifically optimized to bypass protocol fingerprinting and DPI.
-- 🚀 **Advanced Transports:** Comprehensive support for **MASQUE**, **WireGuard**, **Gool (WG-in-WG)**, and **Cloudflare Zero Trust**.
-- 🔗 **Psiphon Chain:** Optional second layer routing traffic via Psiphon for a non-Iran exit IP, chainable over MASQUE, WireGuard, or Gool with Auto, Fallback, and Always modes.
-- 🧅 **Tor Chain:** Optional second layer using the Tor built into Aether Core v2.0.0, with Tor-inside-tunnel, tunnel-through-Tor, and Tor-only modes plus automatic BridgeDB bridges.
-- 📡 **Intelligent Scanning:** Real-time gateway discovery with data-plane validation before connection.
-- ⚡ **Native Performance:** Powered by a high-throughput core for low latency and high bandwidth.
-- 🖥️ **Multi-Platform UI:** Clean, iOS-inspired dashboard built with **Compose Multiplatform** for a seamless experience on both mobile and desktop.
-- 🛠️ **Developer-Ready:** Built-in diagnostics, real-time logging, and flexible protocol presets.
-
-## 🛠️ Supported Protocols
-
-AetherST Tunnel leverages cutting-edge protocols to ensure connectivity even in the most hostile network environments:
-
-### 🎭 MASQUE (HTTP/3 & HTTP/2)
-The flagship protocol for stealth. By tunneling traffic over QUIC (H3) or TLS (H2), it makes VPN traffic look like standard web browsing, making it highly resilient to Deep Packet Inspection (DPI).
-
-### 🛡️ WireGuard
-A modern, high-performance VPN protocol that uses state-of-the-art cryptography. It is optimized for maximum speed and minimal battery drain on mobile devices.
-
-### 🌀 Gool (Warp-in-Warp / WG-in-WG)
-A specialized nested WireGuard configuration. By wrapping one WireGuard tunnel inside another, it provides an additional layer of encryption and obfuscation, effectively bypassing many restrictive firewalls and improving stability.
-
-### ☁️ Cloudflare Zero Trust (Teams)
-Enterprise-grade security for individuals and organizations. It allows you to route your traffic through Cloudflare's global network using Gateway filtering and Service Tokens, ensuring zero-trust access control.
-
-### 🔗 Psiphon Chain
-An optional second layer built on the open-source Psiphon tunnel core. It routes traffic via Psiphon to obtain a non-Iran exit IP and can chain over MASQUE, WireGuard, or Gool. Chain modes include Auto, Fallback, and Always, with a selectable egress region and local endpoints on `127.0.0.1:3080` (SOCKS) and `127.0.0.1:2020` (HTTP).
-
-### 🧅 Tor Chain (Android, Aether Core v2.0.0)
-An optional second layer using the Tor implementation built into the Aether core — no separate Tor app or manual bridge setup required.
-
-**Chain provider selector:** Settings → Connection lets you choose which second layer combines with Aether: **Psiphon** (default, backward compatible) or **Tor**. The Dashboard shows the settings card for the selected provider only.
-
-**Tor modes:**
-- **Tor inside tunnel (`TOR`):** Aether connects first, then Tor rides inside it (`you → WARP → Tor → internet`). The Tor exit is exposed on the configured Tor port (default `127.0.0.1:3081`). Works with any transport — MASQUE, WireGuard, Gool, and MASQUE-in-MASQUE.
-- **Tunnel through Tor (`TOR_REVERSE`):** the tunnel is dialed through Tor, so WARP is reached from a Tor exit and the local network never sees WARP (`you → Tor → WARP → internet`). MASQUE over HTTP/2 only — WireGuard and Gool endpoints are UDP-only and are refused in this mode.
-- **Tor only (`TOR_ONLY`):** no Aether tunnel at all; the main proxy is plain Tor.
-
-**Bridges & transports:** where Tor is blocked, the core fetches its own bridges from BridgeDB for the country you appear to be in — no CAPTCHA, nothing to paste. Pluggable transports (obfs4, snowflake, webtunnel, meek) are discovered automatically; `--tor-pt-dir` remains available in settings as a manual override pointing at a folder with transport binaries. An optional bridge country, forced-bridges mode, and manual bridge lines are also exposed.
-
-### 🌀 MASQUE-in-MASQUE (`--mim`)
-A MASQUE tunnel carried inside another MASQUE tunnel, changing the exit address the way Gool does but on the MASQUE carrier (HTTP/3 in HTTP/3, or HTTP/2 in HTTP/2 with `--h2`). The outer hop is found by scan and the inner one is picked automatically unless named explicitly, and it can carry Tor like any other transport.
+این نرم‌افزار با بهره‌گیری از **هسته اختصاصی Aether Core** همراه با ادغام مستقیم هسته‌های معروفی نظیر **sing-box**، **HEV SOCKS5 Tunnel**، **Psiphon Core** و موتور هدایت دومرحله‌ای، امکان اتصال پایدار و تغییر IP به کشورهای گوناگون (با خروجی تمیز برای هوش مصنوعی و سرویس‌های تحریم‌شده) را به آسانی فراهم می‌آورد.
 
 ---
 
-## 🏗️ Technical Architecture
+## 🌟 قابلیت‌های برجسته (Key Features)
 
-### [Aether Core (v2.0.0)](https://github.com/CluvexStudio/Aether)
-The orchestration layer responsible for:
-- Encrypted tunnel management.
-- Dynamic gateway health checks.
-- Multi-protocol handling (MASQUE, WG, Gool, MASQUE-in-MASQUE).
-- Built-in Tor (arti) with automatic BridgeDB bridges and pluggable transports.
+* 🛡️ **مقاومت بی‌نظیر در برابر DPI:** بهینه‌سازی دقیق ترافیک برای عبور از فیلترینگ مدرن و سیستم‌های شناسایی پکت.
+* 🚀 **پشتیبانی جامع از پروتکل‌های خط اول (Primary Protocols):**
+  * **MASQUE (HTTP/3 & HTTP/2):** مخفی‌سازی ترافیک تانل در قالب ترافیک معتبر و پرسرعت وب با پروتکل‌های QUIC و TLS.
+  * **WireGuard Direct:** اتصال مستقیم و فوق‌العاده سریع با رمزنگاری مدرن و بهینه‌ترین مصرف باتری و منابع.
+  * **Gool (WARP-in-WARP / WG-in-WG):** دو لایه تانل تو در توی وایرگارد جهت پنهان‌سازی و پایداری مضاعف.
+  * **Cloudflare Zero Trust (Teams):** پشتیبانی کامل از اکانت‌های سازمانی زرو‌تراست، توکن‌های احراز هویت و پورت‌های اختصاصی.
+* 🔗 **موتور خروج دومرحله‌ای (Advanced Exit Node Chaining):**
+  * **مستقیم (Direct):** خروج بدون واسطه از تانل اولیه.
+  * **سایفون چند هسته‌ای (Psiphon Multi-Core OSSH):** اجرای موازی هسته‌های سایفون بر بستر تانل اولیه همراه با توازن بار (Load Balancing).
+  * **وایرگارد ثانویه (Custom WireGuard Exit / Proton VPN):** هدایت ترافیک به سمت اکانت‌های Proton VPN، Mullvad و کانفیگ‌های دلخواه WireGuard از طریق مسیردهی کاربران با موتور sing-box.
+  * **پروکسی SOCKS5 اختصاصی:** امکان رله ترافیک درون‌شبکه‌ای به هر سرور SOCKS5 خارجی.
+  * **پروکسی اختصاصی فایرفاکس (Firefox VPN / Mozilla Fastly):** هدایت ترافیک دومرحله‌ای بر روی لبه پرسرعت Fastly موزیلا با متد HTTP/2 CONNECT.
+* ⚡ **فشرده‌سازی حداکثری و بهینه‌سازی حجم (UPX & Strip):** باینری‌های اجرایی دسکتاپ و کتابخانه‌های نیتیو اندروید با فناوری UPX LZMA و Strip فشرده شده‌اند که حجم فایل نصبی را تا ۷۵٪ کاهش داده است.
+* 🎛️ **رابط کاربری مدرن (Compose Multiplatform):** طراحی شیک با المان‌های الهام‌گرفته از iOS، پشتیبانی کامل از زبان‌های فارسی (RTL) و انگلیسی، تم تیره و روشن، پینگ زنده و نمایش اطلاعات آی‌پی خروجی.
+* 🪟 **پشتیبانی اختصاصی ویندوز:** مجهز به درایور قدرتمند Wintun، سیستم روتینگ هوشمند بدون لوپ برای دامنه‌ها و رنج‌های آی‌پی وارپ، و پروکسی دوگانه سیستمی (WinINET HTTP & SOCKS5).
 
-### [HEV SOCKS5 Tunnel v2.17.1](https://github.com/heiher/hev-socks5-tunnel/releases/tag/2.17.1)
-The native bridge between the system and Aether (Android Native):
-- Mature user-space TCP/IP stack.
-- Zero-copy packet processing.
-- Efficient UDP over SOCKS5 translation.
+---
 
-### [Psiphon Tunnel Core v2.0.41](https://github.com/Psiphon-Labs/psiphon-tunnel-core/releases/tag/v2.0.41)
-The optional second-layer circumvention engine:
-- Open-source Psiphon client core for restricted networks.
-- Provides foreign exit IPs with selectable egress region.
-- Chains over the Aether transports (MASQUE, WG, Gool).
+## 🏗️ معماری فنی (Technical Architecture)
 
-### Compose Multiplatform UI
-A unified UI layer sharing logic between Android and Desktop:
-- Reactive state management using Kotlin Flows.
-- Shared domain logic for IP lookup and configuration management.
-- Native system integrations for each platform.
+```
+┌────────────────────────────────────────────────────────┐
+│             AetherST UI (Compose Multiplatform)        │
+│          Android (Compose)  |  Windows (Desktop)       │
+└───────────────────────────┬────────────────────────────┘
+                            │
+┌───────────────────────────▼────────────────────────────┐
+│      Connection Controller & TUN Routing Engine        │
+│     (Dual System Proxy / Wintun / HEV SOCKS Bridge)    │
+└──────────────┬──────────────────────────┬──────────────┘
+               │                          │
+┌──────────────▼───────────┐ ┌────────────▼──────────────┐
+│  Primary Tunnel (Layer 1)│ │ Secondary Detour (Layer 2)│
+│  • MASQUE (HTTP/3, H2)   │ │ • Psiphon Multi-Core      │
+│  • WireGuard Direct      │ │ • WireGuard (Proton VPN)  │
+│  • Gool (WG-in-WG)       │ │ • Firefox VPN (Fastly H2) │
+│  • Zero Trust            │ │ • Custom External SOCKS5  │
+└──────────────────────────┘ └───────────────────────────┘
+```
 
-## 🚀 Getting Started
+---
 
-### Installation
-1. Go to the [Releases](https://github.com/immaghzbad/AetherST/releases) page.
-2. **Android:** Download the APK compatible with your device architecture (`arm64-v8a` is recommended).
-3. **Windows:** Download the `.msi` or `.exe` installer.
-4. Install and grant the necessary permissions (VPN on Android).
+## 📦 دانلود و نصب (Installation)
 
-### Build from Source
-- **IDE:** Android Studio Ladybug (2024.2.1) or newer.
-- **JDK:** 17
-- **NDK:** 30.0.15729638 (for Android native components).
-- **Gradle Tasks:**
-  - Android: `./gradlew :app:assembleRelease`
-  - Desktop: `./gradlew :composeApp:run`
+فایل‌های آماده نصب را می‌توانید مستقیماً از بخش [GitHub Releases](https://github.com/LifeLover-7/AetherST-Private/releases) دریافت نمایید:
 
-## ⚙️ CI/CD & Security
+* **نسخه ویندوز (Windows):**
+  * فایل نصبی آسان: `AetherST-Tunnel-2.1.4.exe`
+  * پکیج نصبی سازمانی: `AetherST-Tunnel-2.1.4.msi`
+* **نسخه اندروید (Android):**
+  * معماری رایج و پرسرعت: `app-arm64-v8a-release.apk`
+  * نسخه عمومی سازگار با تمام دستگاه‌ها: `app-universal-release.apk`
 
-The project uses **GitHub Actions** for automated Multi-APK and Desktop releases.
+---
 
-## 💬 Community
+## 🛠️ ساخت از سورس (Build from Source)
 
-Stay updated and get support through our official channels:
+### پیش‌نیازها:
+* **JDK:** نسخه 17 (توصیه شده: Zulu OpenJDK 17)
+* **Android SDK & NDK:** برای بیلد اندروید (NDK: `30.0.15729638`)
+* **Gradle:** 8.10+
 
-- 📢 **Telegram:** [PowerSigma](https://t.me/PowerSigma)
-- 👨‍💻 **Developer:** [@immaghzbad](https://github.com/immaghzbad)
+### دستورات بیلد:
+```bash
+# بیلد پکیج نصبی ویندوز (EXE و MSI)
+./gradlew :composeApp:packageReleaseDistributionForCurrentOS
 
-## 🙏 Credits
+# کامپایل نسخه دسکتاپ
+./gradlew :composeApp:compileKotlinDesktop
 
-This project uses the following open-source resources:
+# بیلد بسته انتشار اندروید (Release APK)
+./gradlew assembleRelease
+```
 
-- [flag-icons](https://github.com/lipis/flag-icons) — Country flag icons for multi-language and region UI elements.
-- [Vazirmatn](https://github.com/rastikerdar/vazirmatn) — Open-source Persian (Farsi) typeface used for RTL language support.
-- [Inter](https://github.com/rsms/inter) — Open-source English typeface used for the interface typeface.
-- [psiphon-tunnel-core v2.0.41](https://github.com/Psiphon-Labs/psiphon-tunnel-core/releases/tag/v2.0.41) — Open-source Psiphon client core powering the optional Psiphon Chain layer.
+---
+
+## 👥 ارتباط و پشتیبانی (Community)
+
+* 📢 کانال تلگرام: [PowerSigma](https://t.me/PowerSigma)
+* 👨‍💻 توسعه‌دهنده: [@immaghzbad](https://github.com/immaghzbad)
 
 ---
 <p align="center">
-  Built with 💙 by <b>PowerSigma Team</b>
+  توسعه داده شده با ❤️ توسط <b>PowerSigma Team</b>
 </p>

@@ -807,7 +807,7 @@ private fun hasActiveNetworkInterface(): Boolean {
         viewModelScope.launch {
             connectionStatus.collect { state ->
                 when (state) {
-                    ConnectionStatus.RUNNING, ConnectionStatus.TUN_ACTIVE, ConnectionStatus.SOCKS_READY -> {
+                    ConnectionStatus.RUNNING, ConnectionStatus.TUN_ACTIVE -> {
                         val cfg = config.value
                         if (cfg.isTorActive() && ActiveProxyProvider.torProxyUrl.isNullOrEmpty()) {
                             ipRetryJob?.cancel()
@@ -829,22 +829,57 @@ private fun hasActiveNetworkInterface(): Boolean {
                             host = parts.first()
                             port = parts.getOrNull(1)?.toIntOrNull() ?: 3081
                         } else {
-                            host = cfg.socksHost
-                            port = cfg.socksPort.toIntOrNull() ?: 2021
+                            host = "127.0.0.1"
+                            port = when (cfg.exitNodeMode) {
+                                ExitNodeMode.CUSTOM_WG -> ActiveProxyProvider.customWgPort ?: 10805
+                                ExitNodeMode.CUSTOM_SOCKS5 -> 10806
+                                ExitNodeMode.FIREFOX_VPN -> ActiveProxyProvider.firefoxVpnPort ?: cfg.firefoxVpnPort
+                                ExitNodeMode.PSIPHON_POOL -> {
+                                    val psiphon = ActiveProxyProvider.psiphonProxyUrl
+                                    if (!psiphon.isNullOrEmpty()) {
+                                        psiphon.removePrefix("socks5://").removePrefix("socks://").split(":").getOrNull(1)?.toIntOrNull()
+                                            ?: cfg.psiphonSocksPort.toIntOrNull() ?: 3080
+                                    } else {
+                                        cfg.psiphonSocksPort.toIntOrNull() ?: 3080
+                                    }
+                                }
+                                ExitNodeMode.DIRECT -> {
+                                    val psiphon = ActiveProxyProvider.psiphonProxyUrl
+                                    if (!psiphon.isNullOrEmpty()) {
+                                        psiphon.removePrefix("socks5://").removePrefix("socks://").split(":").getOrNull(1)?.toIntOrNull() ?: 3080
+                                    } else {
+                                        cfg.socksPort.toIntOrNull() ?: 2021
+                                    }
+                                }
+                            }
                         }
                         val pingUrl = cfg.pingUrl
                         viewModelScope.launch {
+                            // If a secondary exit node is active, give AetherVpnService a moment to bind the Layer-2 port
+                            if (cfg.exitNodeMode != ExitNodeMode.DIRECT) {
+                                var waitLoops = 0
+                                while (waitLoops < 20) {
+                                    val ready = when (cfg.exitNodeMode) {
+                                        ExitNodeMode.CUSTOM_WG -> ActiveProxyProvider.customWgPort != null
+                                        ExitNodeMode.FIREFOX_VPN -> ActiveProxyProvider.firefoxVpnPort != null
+                                        else -> true
+                                    }
+                                    if (ready) break
+                                    delay(350.milliseconds)
+                                    waitLoops++
+                                }
+                            }
                             PingRepository.runPing(host, port, useProxy = true, pingUrl = pingUrl)
-                            delay(600.milliseconds)
+                            delay(500.milliseconds)
                             fetchPublicIp()
                         }
                         ipRetryJob?.cancel()
                         ipRetryJob = viewModelScope.launch {
                             var attempts = 0
                             while (attempts < 6) {
-                                delay(7000.milliseconds)
+                                delay(6000.milliseconds)
                                 val current = IpInfoRepository.ipInfo.value
-                                if (current.ip.isEmpty() || current.isLoading) {
+                                if (current.ip.isEmpty() || current.isLoading || (cfg.exitNodeMode != ExitNodeMode.DIRECT && attempts == 0)) {
                                     fetchPublicIp()
                                     attempts++
                                 } else {
@@ -853,7 +888,7 @@ private fun hasActiveNetworkInterface(): Boolean {
                             }
                         }
                     }
-                    ConnectionStatus.RECONNECTING, ConnectionStatus.DATAPLANE_VALIDATED, ConnectionStatus.VALIDATING, ConnectionStatus.STARTING -> {
+                    ConnectionStatus.SOCKS_READY, ConnectionStatus.RECONNECTING, ConnectionStatus.DATAPLANE_VALIDATED, ConnectionStatus.VALIDATING, ConnectionStatus.STARTING -> {
                         ipRetryJob?.cancel()
                     }
                     ConnectionStatus.STOPPED, ConnectionStatus.FAILED, ConnectionStatus.ERROR -> {

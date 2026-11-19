@@ -291,7 +291,10 @@ class SocksTunBridge(
             if (!tunOutputQueue.offer(data)) tunDropCount.incrementAndGet()
         }
     }
-    private fun gateReady(): Boolean = SocksGate.readiness.value == SocksReadiness.PROBED_OK
+    private fun isLoopbackUpstream(): Boolean = socksHost == "127.0.0.1" || socksHost.equals("localhost", ignoreCase = true) || socksHost == "::1"
+    private fun protectIfRemote(socket: Socket): Boolean = if (isLoopbackUpstream()) true else vpnService.protect(socket)
+    private fun protectUdpIfRemote(socket: DatagramSocket): Boolean = if (isLoopbackUpstream()) true else vpnService.protect(socket)
+    private fun gateReady(): Boolean = isRunning.get() || SocksGate.readiness.value == SocksReadiness.PROBED_OK
     private fun noteGate() {
         val g = SocksGate.readiness.value
         val prev = lastGateSeen
@@ -364,7 +367,7 @@ class SocksTunBridge(
                 ctrl = null
                 relay = null
                 val s = Socket()
-                if (!vpnService.protect(s)) {
+                if (!protectIfRemote(s)) {
                     runCatching { s.close() }
                     return null
                 }
@@ -1143,7 +1146,7 @@ class SocksTunBridge(
                     LogRepository.i("[Routing] DIRECT_CONNECTED domain=${decision.resolvedDomain ?: "unknown"} ip=$targetIpStr via=$directNetworkType local=${s.localAddress.hostAddress}")
                     DirectRouteVerifier.verify(decision.resolvedDomain ?: targetIpStr, network, directNetworkType)
                 } else {
-                    if (!vpnService.protect(s)) {
+                    if (!protectIfRemote(s)) {
                         LogRepository.w("[TunBridge] protect failed for $targetIpStr:$serverPort")
                         sendRstOnce()
                         return
@@ -1404,7 +1407,7 @@ class SocksTunBridge(
                     } else {
                         val ctrl = Socket()
                         ctrlSock = ctrl
-                        if (!vpnService.protect(ctrl)) {
+                        if (!protectIfRemote(ctrl)) {
                             LogRepository.w("[TunBridge] UDP protect ctrl failed for $targetIpStr:$serverPort")
                         }
                         ctrl.tcpNoDelay = true
@@ -1445,7 +1448,7 @@ class SocksTunBridge(
                     LogRepository.i("[Routing] DIRECT_UDP_BOUND domain=${decision.resolvedDomain ?: "unknown"} ip=$targetIpStr via=$directNetworkType")
                     DirectRouteVerifier.verify(decision.resolvedDomain ?: targetIpStr, network, directNetworkType)
                 } else {
-                    if (!vpnService.protect(relaySocket)) {
+                    if (!protectUdpIfRemote(relaySocket)) {
                         LogRepository.w("[TunBridge] UDP protect relay failed for $targetIpStr:$serverPort")
                     }
                 }
