@@ -61,7 +61,9 @@ jobs:
           ls -la composeApp/src/desktopMain/resources/bin
 
       - name: Build EXE and MSI
-        run: ./gradlew :composeApp:packageReleaseDistributionForCurrentOS
+        run: |
+          ./gradlew :composeApp:packageReleaseDistributionForCurrentOS
+          ./gradlew --stop
 
       - name: Upload EXE Artifact
         uses: actions/upload-artifact@v4
