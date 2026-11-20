@@ -2,6 +2,11 @@ name: Release
 
 on:
   workflow_dispatch:
+    inputs:
+      arm64_only:
+        description: 'Build only the arm64-v8a APK (skip the universal APK)'
+        type: boolean
+        default: false
   push:
     tags:
       - 'v*'
@@ -70,14 +75,15 @@ jobs:
           find app/src/main/jniLibs -name "*.so" -exec strip --strip-unneeded {} + 2>/dev/null || true
 
       - name: Build Android Release APK
-        run: |
-          ./gradlew assembleRelease --no-daemon
+        env:
+          ORG_GRADLE_PROJECT_arm64Only: ${{ inputs.arm64_only && 'true' || 'false' }}
+        run: ./gradlew :app:assembleRelease --no-daemon
 
       - name: Upload APK Artifact
         uses: actions/upload-artifact@v4
         continue-on-error: true
         with:
-          name: AetherST-Android
+          name: ${{ inputs.arm64_only && 'AetherST-Android-arm64-v8a' || 'AetherST-Android' }}
           path: app/build/outputs/apk/**/*.apk
           retention-days: 3
 

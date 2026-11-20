@@ -68,7 +68,7 @@ android {
       isEnable = true
       reset()
       include("arm64-v8a")
-      isUniversalApk = true
+      isUniversalApk = !providers.gradleProperty("arm64Only").getOrElse("false").toBoolean()
     }
   }
 
