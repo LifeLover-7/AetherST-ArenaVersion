@@ -353,6 +353,12 @@ data class AetherConfig(
     }
 
     fun effectiveIpMode(): AetherIpMode = if (ipMode == AetherIpMode.AUTO) AetherIpMode.DUAL else ipMode
+    /** Both exit pickers make the same explicit selection. Don't silently resurrect the
+     * previous Tor/Psiphon chain when the user switches back to a direct primary. */
+    fun selectExitNode(mode: ExitNodeMode): AetherConfig = copy(
+        exitNodeMode = mode, psiphonEnabled = mode == ExitNodeMode.PSIPHON_POOL, torEnabled = false,
+        chainProvider = if (mode == ExitNodeMode.PSIPHON_POOL) ChainProvider.PSIPHON else chainProvider
+    )
     fun isPsiphonActive(): Boolean = !exitNodeMode.needsVpnExit && ((chainProvider == ChainProvider.PSIPHON && psiphonEnabled) || exitNodeMode == ExitNodeMode.PSIPHON_POOL)
     fun isTorActive(): Boolean = !exitNodeMode.needsVpnExit && chainProvider == ChainProvider.TOR && torEnabled
 }

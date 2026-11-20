@@ -542,7 +542,7 @@ private fun ConnectionPage(
                         4 -> ExitNodeMode.FIREFOX_VPN
                         else -> ExitNodeMode.DIRECT
                     }
-                    onUpdateConfig(config.copy(exitNodeMode = mode))
+                    onUpdateConfig(config.selectExitNode(mode))
                 }
             )
             if (config.exitNodeMode == ExitNodeMode.CUSTOM_WG) {

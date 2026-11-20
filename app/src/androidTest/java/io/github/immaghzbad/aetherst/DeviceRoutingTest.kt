@@ -17,7 +17,6 @@ import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
 import org.json.JSONObject
 import org.junit.Assert.*
-import org.junit.Assume.assumeTrue
 import org.junit.Test
 import java.io.File
 import java.net.ServerSocket
@@ -30,6 +29,28 @@ class DeviceRoutingTest {
     private val ctx = instrumentation.targetContext
     private fun shell(cmd: String): String = ParcelFileDescriptor.AutoCloseInputStream(
         instrumentation.uiAutomation.executeShellCommand(cmd)).bufferedReader().use { it.readText() }
+
+    @Test fun primarySelection() {
+        check(ctx.packageName.endsWith(".runtimecheck"))
+        val repo = AetherConfigRepository.getInstance(getSettings(PlatformContext(ctx)))
+        val old = AetherConfig(protocol = AetherProtocol.MASQUE, mimEnabled = true, mimOuter = "192.0.2.1:443",
+            mimInner = "192.0.2.2:443", chainProvider = ChainProvider.PSIPHON, psiphonEnabled = true)
+        repo.applyDetectedConfig(old)
+        assertEquals(AetherProtocol.MIM, repo.config.value.primaryProtocol)
+        assertFalse(old.selectExitNode(ExitNodeMode.DIRECT).isPsiphonActive())
+        assertFalse(old.copy(chainProvider = ChainProvider.TOR, torEnabled = true).selectExitNode(ExitNodeMode.DIRECT).isTorActive())
+        for ((preset, expected) in listOf("stealth" to AetherProtocol.MIM, "gaming" to AetherProtocol.GOOL,
+                "ironclad" to AetherProtocol.WG, "turbo" to AetherProtocol.MASQUE)) {
+            repo.applyPreset(preset)
+            assertEquals(preset, expected, repo.config.value.primaryProtocol)
+        }
+        val classic = old.copy(protocol = AetherProtocol.GOOL, goolClassic = true, wiwOuter = "192.0.2.1:2408")
+        assertEquals(listOf("--gool-classic", "--wiw-outer", "192.0.2.1:2408"), classic.primaryArguments())
+        assertTrue("--wiw-scan" in classic.copy(wiwOuter = "").primaryArguments())
+        assertFalse("--mim-scan" in old.primaryArguments())
+        assertTrue("--mim-scan" in old.copy(mimOuter = "", mimInner = "").primaryArguments())
+        assertTrue("--h3" in old.copy(httpVersion = MasqueHttpVersion.H3).primaryArguments())
+    }
 
     @Test fun listenerEvidence() {
         val bind = "127.0.0.1:2021"
@@ -49,7 +70,7 @@ class DeviceRoutingTest {
 
     private fun route(proto: AetherProtocol, exit: ExitNodeMode, expected: String, classic: Boolean = false) {
         // Never touch a normal installation or its identities. Fixture assets are ephemeral.
-        assumeTrue(ctx.packageName.endsWith(".runtimecheck"))
+        check(ctx.packageName.endsWith(".runtimecheck")) { "Run only on the disposable runtime-check build" }
         val assets = instrumentation.context.assets
         fun text(name: String) = assets.open(name).bufferedReader().use { it.readText() }
         val peers = JSONObject(text("peers.json"))
@@ -84,10 +105,20 @@ class DeviceRoutingTest {
         val firstLog = LogRepository.logs.value.lastOrNull()?.id ?: 0L
         try {
             assertTrue(AetherVpnService.startVpn(ctx))
-            runBlocking { withTimeout(90_000) { while (ConnectionController.status.value != ConnectionStatus.RUNNING) delay(100) } }
+            runBlocking {
+                withTimeout(90_000) {
+                    while (ConnectionController.status.value != ConnectionStatus.RUNNING) {
+                        val failure = LogRepository.logs.value.lastOrNull { it.id > firstLog &&
+                            (it.message.startsWith("[Controller] Startup failed:") || it.message.startsWith("[VpnService] Rollback:")) }
+                        check(failure == null) { failure!!.message }
+                        delay(100)
+                    }
+                }
+            }
             val nonce = System.nanoTime()
-            val reply = shell("sh -c 'printf \"GET /$nonce HTTP/1.0\\r\\nHost: fixture\\r\\n\\r\\n\" | timeout 10 nc -w 8 192.0.2.42 80'")
-            assertTrue("Device TUN did not reach $expected", reply.contains("via-$expected:/$nonce"))
+            // UiAutomation uses Runtime.exec(String); it splits whitespace and does not parse shell quoting.
+            val reply = shell("sh /data/local/tmp/aether-runtime-probe.sh $nonce")
+            assertTrue("Device TUN did not reach $expected: ${reply.take(160)}", reply.contains("via-$expected:/$nonce"))
             val lines = LogRepository.logs.value.filter { it.id > firstLog }.map { it.message }
             if (proto == AetherProtocol.GOOL && !classic) assertTrue("Unexpected classic fallback", lines.any { "gool ready:" in it })
             assertTrue(lines.any { "VPN tunnel active" in it || "Final SOCKS listener verified" in it })

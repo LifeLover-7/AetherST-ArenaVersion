@@ -56,6 +56,7 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.dropWhile
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
@@ -140,17 +141,17 @@ class AetherVpnService : VpnService() {
 
     override fun onCreate() {
         super.onCreate()
+        createNotificationChannel() // Android 8+ requires the channel before the first foreground notification.
         showInitialNotification()
         LogRepository.initialize(getSettings(PlatformContext(this)))
         PsiphonController.setVpnService(this)
         TorController.setVpnService(this)
-        createNotificationChannel()
 
         val pm = getSystemService(POWER_SERVICE) as PowerManager
         wakeLock = pm.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "AetherST:VpnWakeLock")
 
         scope.launch {
-            ConnectionController.status.collect { status ->
+            ConnectionController.status.dropWhile { it == ConnectionStatus.STOPPED }.collect { status ->
                 updateNotification()
                 handleTunLifecycle(status)
                 handleAutoReconnectOnStatus(status)
@@ -958,6 +959,7 @@ class AetherVpnService : VpnService() {
                 startForeground(NOTIFICATION_ID, notification)
             }
         } catch (e: Exception) {
+            LogRepository.e("[VpnService] startForeground failed: ${e.localizedMessage}")
             try { stopSelf() } catch (_: Exception) {}
         }
     }

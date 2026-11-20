@@ -1294,13 +1294,7 @@ fun ExitNodeCard(
                             .clip(RoundedCornerShape(9.dp))
                             .background(bg)
                             .clickable(enabled = enabled) {
-                                onUpdateConfig(
-                                    config.copy(
-                                        exitNodeMode = mode,
-                                        psiphonEnabled = (mode == ExitNodeMode.PSIPHON_POOL),
-                                        chainProvider = if (mode == ExitNodeMode.PSIPHON_POOL) ChainProvider.PSIPHON else config.chainProvider
-                                    )
-                                )
+                                onUpdateConfig(config.selectExitNode(mode))
                             },
                         contentAlignment = Alignment.Center
                     ) {

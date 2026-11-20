@@ -745,7 +745,7 @@ class AetherConfigRepository private constructor(private val settings: Settings)
             )
             else -> current
         }
-        updated = enforceWireGuardConstraints(updated)
+        updated = enforceWireGuardConstraints(updated.copy(mimEnabled = targetProtocol == AetherProtocol.MIM))
         LogRepository.i("Configuration profile applied: $presetId")
         saveToSettings("", updated)
         saveProtocolSettings(updated)

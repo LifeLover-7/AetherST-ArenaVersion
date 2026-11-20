@@ -20,6 +20,7 @@ import io.github.immaghzbad.aetherst.core.ConnectionController
 import io.github.immaghzbad.aetherst.shared.data.LogRepository
 import io.github.immaghzbad.aetherst.shared.model.ConnectionStatus
 import kotlinx.coroutines.*
+import kotlinx.coroutines.flow.dropWhile
 import java.util.concurrent.atomic.AtomicLong
 
 class AetherProxyService : Service() {
@@ -76,7 +77,7 @@ class AetherProxyService : Service() {
         wakeLock = pm.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "AetherST:ProxyWakeLock")
 
         scope.launch {
-            ConnectionController.status.collect {
+            ConnectionController.status.dropWhile { it == ConnectionStatus.STOPPED }.collect {
                 updateNotification()
                 runCatching { AetherWidgetProvider.updateAllWidgets(this@AetherProxyService) }
             }

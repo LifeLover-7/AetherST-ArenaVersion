@@ -4,9 +4,10 @@ cd "$(dirname "$0")/../.."
 pkg=io.github.immaghzbad.aetherst.runtimecheck
 adb install -r "$(find app/build/outputs/apk/debug -name '*.apk' -print -quit)"
 adb install -r "$(find app/build/outputs/apk/androidTest/debug -name '*.apk' -print -quit)"
+adb push tools/android-runtime/probe.sh /data/local/tmp/aether-runtime-probe.sh
 adb shell appops set "$pkg" ACTIVATE_VPN allow
 result=0
-for test in listenerEvidence wgProton wgFirefox goolDirect classicGoolDirect mimDirect; do
+for test in primarySelection listenerEvidence wgProton wgFirefox goolDirect classicGoolDirect mimDirect; do
   log="$RUNNER_TEMP/device-$test.txt"
   adb shell am instrument -w -r -e class "io.github.immaghzbad.aetherst.DeviceRoutingTest#$test" "$pkg.test/androidx.test.runner.AndroidJUnitRunner" | tee "$log"
   if grep -Fq 'OK (1 test)' "$log" && ! grep -q 'Error in\|shortMsg=\|FAILURES!!!\|AssumptionViolatedException' "$log"; then
