@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Linux x86-64, JDK 17, Android SDK, Go 1.24. All test traffic stays on loopback.
+# Linux x86-64, JDK 17, Go 1.24. All test traffic stays on loopback.
 set -Eeuo pipefail
 root=$(cd "$(dirname "$0")/../.." && pwd)
 tmp=$(mktemp -d); trap 'rm -rf "$tmp"' EXIT
@@ -17,6 +17,6 @@ if [[ -z ${AETHER_TEST_WG_PEER:-} ]]; then
     (cd "$root/tools/exit-test/peer" && go build -mod=readonly -o "$tmp/peer" .)
     export AETHER_TEST_WG_PEER="$tmp/peer"
 fi
-phase='Android local unit tests'
+phase='Shared transport tests'
 cd "$root"
-bash gradlew :composeApp:testReleaseUnitTest --tests '*ExitTunnelTest' --tests '*WireGuardDataPlaneTest' --no-daemon
+bash gradlew -p tools/exit-test test --no-daemon

@@ -57,10 +57,6 @@ kotlin {
                 implementation(libs.androidx.datastore.preferences)
                 implementation(libs.androidsvg)
             }
-            getByName("androidUnitTest").dependencies {
-                implementation(kotlin("test-junit"))
-                implementation("com.squareup.okhttp3:okhttp-tls:${libs.versions.okhttp.get()}")
-            }
         }
         getByName("desktopMain").dependencies {
             implementation("net.java.dev.jna:jna:5.14.0")

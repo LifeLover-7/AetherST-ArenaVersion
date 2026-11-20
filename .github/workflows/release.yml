@@ -34,9 +34,7 @@ jobs:
         with:
           go-version: '1.24.x'
           cache: false
-      - name: Accept Android SDK licenses for the test build
-        run: yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses >/dev/null || true
-      - name: Exercise both exits (Android local unit tests)
+      - name: Run shared transport tests with local peers
         shell: bash
         run: |
           set -o pipefail
@@ -44,8 +42,8 @@ jobs:
             python3 - <<'DIAG'
           import os, pathlib
           lines = pathlib.Path(os.environ['RUNNER_TEMP'], 'exit-tests.log').read_text(errors='replace').splitlines()
-          for line in [l for l in lines if l.strip() and not l.startswith('::')][-25:]:
-              print('::error title=Loopback diagnostics::' + line[:750].replace('%', '%25'))
+          reason = '\n'.join(l for l in lines[-28:] if not l.startswith('::'))
+          print('::error title=Loopback diagnostics::' + reason.replace('%', '%25').replace('\n', '%0A'))
           DIAG
             exit 1
           fi
@@ -54,7 +52,7 @@ jobs:
         run: |
           python3 - <<'PYTEST'
           import glob, xml.etree.ElementTree as ET
-          cases = [t for f in glob.glob('composeApp/build/test-results/testReleaseUnitTest/TEST-*.xml') for t in ET.parse(f).iter('testcase')]
+          cases = [t for f in glob.glob('tools/exit-test/build/test-results/test/TEST-*.xml') for t in ET.parse(f).iter('testcase')]
           for t in cases:
               bad = next((x for x in t if x.tag in ('failure', 'error', 'skipped')), None)
               print(f"::{'error' if bad is not None else 'notice'} title=Loopback test::{t.get('name')}: {bad.get('message', bad.tag)[:300] if bad is not None else 'PASS'}")

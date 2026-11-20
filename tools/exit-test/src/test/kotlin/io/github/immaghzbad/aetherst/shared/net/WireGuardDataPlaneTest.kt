@@ -3,7 +3,6 @@ package io.github.immaghzbad.aetherst.shared.net
 import io.github.immaghzbad.aetherst.shared.model.CustomWireGuardConfig
 import okhttp3.OkHttpClient
 import okhttp3.Request
-import org.junit.Assume.assumeNotNull
 import org.junit.Test
 import java.net.InetSocketAddress
 import java.net.Proxy
@@ -14,7 +13,7 @@ class WireGuardDataPlaneTest {
     @Test(timeout = 30000) fun encryptedRoundTripRequiresPrimaryUdpRelay() {
         val binary = System.getenv("AETHER_TEST_SING_BOX")
         val fixture = System.getenv("AETHER_TEST_WG_PEER")
-        assumeNotNull(binary, fixture) // tools/exit-test/run.sh supplies both.
+        require(binary != null && fixture != null) { "Use tools/exit-test/run.sh to provide both local test executables" }
         val peer = ProcessBuilder(fixture).redirectError(ProcessBuilder.Redirect.INHERIT).start()
         try {
             val info = peer.inputStream.bufferedReader().readLine()?.split(' ') ?: error("Local test peer did not start")
