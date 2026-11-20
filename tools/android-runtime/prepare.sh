@@ -9,7 +9,7 @@ cd "$out"
 openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:P-256 -nodes -subj '/CN=Ephemeral emulator test CA' -days 2 -keyout ca.key -out res/raw/device_ca.pem
 openssl req -new -newkey ec -pkeyopt ec_paramgen_curve:P-256 -nodes -subj '/CN=edge.fixture.test' -keyout leaf.key -out leaf.csr
 printf '%s\n' 'basicConstraints=CA:FALSE' 'extendedKeyUsage=serverAuth,clientAuth' 'subjectAltName=DNS:edge.fixture.test,DNS:firefox.settings.services.mozilla.com,IP:1.1.1.1' > extensions
-openssl x509 -req -in leaf.csr -CA res/raw/device_ca.pem -CAkey ca.key -CAcreateserial -days 2 -extfile extensions -out leaf.pem
+openssl x509 -req -in leaf.csr -CA res/raw/device_ca.pem -CAkey ca.key -set_serial 1 -days 2 -extfile extensions -out leaf.pem
 # Only the emulator-specific debug variant consumes these resources. Release trusts system roots only.
 cat > res/xml/network_security_config.xml <<'XML'
 <network-security-config>
