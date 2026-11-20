@@ -18,6 +18,7 @@ object WireGuardConfigParser {
         var mtu = 1280
 
         var publicKey = ""
+        var preSharedKey = ""
         var endpoint = ""
         val allowedIpsV4List = mutableListOf<String>()
         val allowedIpsV6List = mutableListOf<String>()
@@ -87,6 +88,7 @@ object WireGuardConfigParser {
                 "peer" -> {
                     when (key) {
                         "publickey" -> publicKey = value
+                        "presharedkey" -> preSharedKey = value
                         "endpoint" -> endpoint = value
                         "allowedips" -> {
                             val parts = value.split(',').map { it.trim() }.filter { it.isNotEmpty() }
@@ -126,6 +128,7 @@ object WireGuardConfigParser {
             dns = if (dnsList.isNotEmpty()) dnsList.joinToString(", ") else "1.1.1.1",
             mtu = 1280, // Always enforce 1280
             publicKey = publicKey,
+            preSharedKey = preSharedKey,
             endpoint = endpoint,
             allowedIpsV4 = if (allowedIpsV4List.isNotEmpty()) allowedIpsV4List.joinToString(", ") else "0.0.0.0/0",
             allowedIpsV6 = if (allowedIpsV6List.isNotEmpty()) allowedIpsV6List.joinToString(", ") else "::/0",

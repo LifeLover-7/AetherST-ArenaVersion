@@ -14,9 +14,7 @@ import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
 import java.io.BufferedInputStream
 import java.io.BufferedOutputStream
-import java.io.ByteArrayOutputStream
 import java.io.DataInputStream
-import java.io.File
 import java.io.InputStream
 import java.io.OutputStream
 import java.net.DatagramPacket
@@ -34,17 +32,12 @@ import java.util.Base64
 import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.Executors
-import java.util.concurrent.LinkedBlockingQueue
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
-import java.util.concurrent.atomic.AtomicInteger
 import javax.crypto.Mac
 import javax.crypto.SecretKeyFactory
 import javax.crypto.spec.PBEKeySpec
 import javax.crypto.spec.SecretKeySpec
-import javax.net.ssl.SNIHostName
-import javax.net.ssl.SSLContext
-import javax.net.ssl.SSLSocket
 import kotlin.concurrent.thread
 
 /**
@@ -56,593 +49,137 @@ class FxaVerificationRequiredException(
     override val message: String
 ) : IllegalStateException(message)
 
-/**
- * Two-stage chained tunnel: Aether (Stage 1 anti-censorship) -> Firefox VPN / Mozilla Fastly (Stage 2 exit node).
- *
- * Implements the verified Mozilla Firefox VPN / FoxyVPN / Kumiho protocol specification:
- *  1. Control Plane:
- *     - FxA Hawk-signed requests with mandatory `hash="<payloadHash>"` (`hawk.1.payload\napplication/json\n<body>\n`).
- *     - PKCE Authorization Code Grant (`POST /v1/oauth/authorization` -> `POST /v1/token` / `/v1/oauth/token`)
- *       across both `https://oauth.accounts.firefox.com/v1` (sibling host not blocked by Fastly 406) and
- *       `https://api.accounts.firefox.com/v1`, with direct Hawk `POST /v1/oauth/token` fallback.
- *     - Guardian ProxyPass minting via `GET https://vpn.mozilla.org/api/v1/fpn/token` with mandatory
- *       `User-Agent: MozillaVPN/2.35.0 (sys:linux; iap:true)` and automatic entitlement activation
- *       via `POST https://vpn.mozilla.org/api/v1/fpn/activate` on HTTP 401/403.
- *     - Live Server List discovery from Mozilla Remote Settings:
- *       `GET https://firefox.settings.services.mozilla.com/v1/buckets/main/collections/vpn-serverlist/records`
- *       extracting `protocols` -> `connect` (`host:port`), skipping `quarantined == true`, with official
- *       Fastly MASQUE/CONNECT aggregate fallbacks (`<cc>.m1.fastly-masque.net:443`).
- *  2. Data Plane:
- *     - Native Kotlin HTTP/2 (`ALPN h2`) multiplexed `CONNECT` client + HTTP/1.1 `CONNECT` fallback
- *       tunneled over Aether's Layer-1 SOCKS5 proxy (`primarySocksHost:primarySocksPort`).
- *     - Sends `Proxy-Authorization: ProxyPass <proxy_pass_jwt>` and `User-Agent: MozillaVPN/2.35.0 (sys:linux; iap:true)`.
- *     - Intercepts all DNS queries (both SOCKS5 TCP `:53` and SOCKS5 `UDP ASSOCIATE` `:53`) and resolves
- *       them via in-tunnel DNS-over-HTTPS (`POST https://1.1.1.1/dns-query` over an H2 CONNECT stream to `1.1.1.1:443`)
- *       because Mozilla's Fastly edge permits TCP ports 80 and 443 only.
- */
-class FirefoxVpnExitTunnel(
-    private val token: String = "",
-    private val country: String = "",
-    private val binaryPath: String?,
-    private val workingDir: String,
-    private val primarySocksHost: String = "127.0.0.1",
-    private val primarySocksPort: Int = 2021,
-    val localListenPort: Int = 10810
+/** Authorized Firefox CONNECT proxy over the active Aether SOCKS5 hop. */
+class FirefoxVpnExitTunnel internal constructor(
+    private val primary: Proxy,
+    val localListenPort: Int,
+    private val getPass: (refresh: Boolean) -> String?,
+    private val getEdges: () -> List<EdgeEndpoint>,
+    private val probe: (Int) -> String?,
+    private val tlsFactory: javax.net.ssl.SSLSocketFactory
 ) {
+    constructor(token: String, country: String, primarySocksHost: String = "127.0.0.1", primarySocksPort: Int = 2021,
+                localListenPort: Int = 10810) : this(
+        Proxy(Proxy.Type.SOCKS, InetSocketAddress(primarySocksHost, primarySocksPort)), localListenPort,
+        { refresh -> resolveLiveProxyPassJwt(token, primarySocksHost, primarySocksPort, forceRefresh = refresh) },
+        { resolveCountryExitCandidates(country, primarySocksHost, primarySocksPort) },
+        { ExitIpProbe(it).check() }, javax.net.ssl.SSLSocketFactory.getDefault() as javax.net.ssl.SSLSocketFactory
+    )
+
     private val isRunning = AtomicBoolean(false)
     @Volatile private var socksServerSocket: ServerSocket? = null
     @Volatile private var httpServerSocket: ServerSocket? = null
     @Volatile private var udpRelaySocket: DatagramSocket? = null
-    @Volatile private var activeH2Session: H2ConnectSession? = null
-    @Volatile private var currentProxyPass: String = ""
-    @Volatile private var currentEdgeHost: String = "us.m1.fastly-masque.net"
-    @Volatile private var currentEdgePort: Int = 443
-    @Volatile private var renewalThread: Thread? = null
-    private val executor = Executors.newCachedThreadPool()
+    private val sessionLock = Any()
+    @Volatile private var session: FirefoxConnectSession? = null
+    private var currentEdge: EdgeEndpoint? = null
+    @Volatile private var currentProxyPass = ""
+    @Volatile private var rejected: ConnectRejected? = null
+    private var renewalThread: Thread? = null
+    private val clients = ConcurrentHashMap.newKeySet<Socket>()
+    private val executor = Executors.newCachedThreadPool { r -> Thread(r, "FirefoxVPN-worker").apply { isDaemon = true } }
 
-    @Volatile
-    var verifiedExitIp: String? = null
+    @Volatile var verifiedExitIp: String? = null
+        private set
+    @Volatile var lastErrorMessage: String? = null
         private set
 
-    @Volatile
-    var lastErrorMessage: String? = null
-        private set
+    data class EdgeEndpoint(val host: String, val port: Int, val countryCode: String)
 
-    data class EdgeEndpoint(
-        val host: String,
-        val port: Int,
-        val countryCode: String
-    )
+    private fun connect(edge: EdgeEndpoint) = FirefoxConnectSession(HostPort(edge.host, edge.port), primary, tlsFactory) { currentProxyPass }
 
     @Synchronized
     fun start(): Boolean {
-        if (isRunning.get() && isHealthy()) return true
-        stopInternal()
-        isRunning.set(true)
-        verifiedExitIp = null
+        if (isHealthy()) return true
+        stop()
         lastErrorMessage = null
-
-        val cleanToken = token.trim()
-        if (cleanToken.isBlank()) {
-            lastErrorMessage = "Firefox VPN token is empty. Please sign in with Firefox WebView or enter a token."
-            LogRepository.e("[FirefoxVpn] $lastErrorMessage", "FirefoxVpn")
-            isRunning.set(false)
-            return false
-        }
-
+        isRunning.set(true)
         return try {
-            // 1. Mint a fresh 10-minute Guardian ProxyPass JWT through Aether's Layer-1 SOCKS5 proxy
-            LogRepository.i("[FirefoxVpn] Minting Guardian ProxyPass JWT via Aether ($primarySocksHost:$primarySocksPort)...", "FirefoxVpn")
-            val proxyPass = resolveLiveProxyPassJwt(cleanToken, primarySocksHost, primarySocksPort)
-            if (proxyPass.isNullOrBlank()) {
-                lastErrorMessage = "Failed to obtain Mozilla Guardian ProxyPass JWT (check Firefox Account VPN entitlement or region)"
-                LogRepository.e("[FirefoxVpn] $lastErrorMessage", "FirefoxVpn")
-                stopInternal()
-                return false
+            require(localListenPort in 2..65535 && (primary.address() as InetSocketAddress).port !in (localListenPort - 1)..localListenPort) {
+                "Invalid or overlapping Firefox proxy ports"
             }
-            currentProxyPass = proxyPass
-            LogRepository.i("[FirefoxVpn] Guardian ProxyPass JWT ready (${proxyPass.take(16)}...).", "FirefoxVpn")
-
-            // 2. Resolve live Fastly/Mozilla CONNECT edge candidates from Remote Settings vpn-serverlist
-            val edgeCandidates = resolveCountryExitCandidates(country.trim(), primarySocksHost, primarySocksPort)
-            var connectedEdge: EdgeEndpoint? = null
-
-            for (candidate in edgeCandidates.take(4)) {
-                LogRepository.i("[FirefoxVpn] Dialing Mozilla Fastly edge ${candidate.host}:${candidate.port} (${candidate.countryCode}) via Aether $primarySocksHost:$primarySocksPort...", "FirefoxVpn")
-                val session = H2ConnectSession(
-                    edgeHost = candidate.host,
-                    edgePort = candidate.port,
-                    socksHost = primarySocksHost,
-                    socksPort = primarySocksPort,
-                    proxyPassProvider = { currentProxyPass }
-                )
-                if (session.connect()) {
-                    activeH2Session = session
-                    currentEdgeHost = candidate.host
-                    currentEdgePort = candidate.port
-                    connectedEdge = candidate
-                    LogRepository.i("[FirefoxVpn] Connected to Mozilla edge ${candidate.host}:${candidate.port} (ALPN=${session.negotiatedProtocol}).", "FirefoxVpn")
-                    break
-                } else {
-                    session.close()
-                }
-            }
-
-            if (connectedEdge == null) {
-                lastErrorMessage = "Could not establish TLS/HTTP2 session to Mozilla Fastly VPN edge"
-                LogRepository.e("[FirefoxVpn] $lastErrorMessage", "FirefoxVpn")
-                stopInternal()
-                return false
-            }
-
-            // 3. Start local UDP DoH Relay, SOCKS5 (localListenPort = 10810), and HTTP Proxy (10809)
+            currentProxyPass = getPass(false)?.takeIf { it.isNotBlank() } ?: error("Firefox VPN authorization unavailable or expired")
+            val edges = getEdges()
             startLocalUdpDnsRelay()
             startLocalSocks5Server(localListenPort)
             startLocalHttpServer(localListenPort - 1)
-            startProxyPassRenewalLoop(cleanToken)
-
-            var listening = false
-            for (i in 1..25) {
-                if (probePort("127.0.0.1", localListenPort)) {
-                    listening = true
-                    break
+            for (edge in edges.take(4)) {
+                val candidate = try { connect(edge) } catch (e: Exception) {
+                    LogRepository.w("[FirefoxVpn] TLS to ${edge.host} failed (${e.javaClass.simpleName})", "FirefoxVpn")
+                    continue
                 }
-                Thread.sleep(100)
+                synchronized(sessionLock) { session = candidate; currentEdge = edge; rejected = null }
+                // Probe through the actual local SOCKS handler. Never hold sessionLock while waiting for it.
+                val ip = probe(localListenPort)
+                if (ip != null && candidate.isAlive()) {
+                    verifiedExitIp = ip
+                    startProxyPassRenewalLoop()
+                    LogRepository.i("[FirefoxVpn] Verified ${candidate.protocol} CONNECT via ${edge.host}; exit IP $ip", "FirefoxVpn")
+                    return true
+                }
+                synchronized(sessionLock) { candidate.close(); session = null }
+                rejected?.let { if (it.status in setOf(401, 403, 407, 429)) throw it }
             }
-
-            if (!listening) {
-                lastErrorMessage = "Listening port $localListenPort failed to open"
-                LogRepository.e("[FirefoxVpn] $lastErrorMessage", "FirefoxVpn")
-                stopInternal()
-                return false
-            }
-
-            val exitIp = verifyDataPlaneWithRetry(localListenPort, maxAttempts = 4)
-            if (exitIp != null) {
-                verifiedExitIp = exitIp
-                LogRepository.i("[FirefoxVpn] Two-stage Firefox VPN tunnel active & verified! Exit IP: $exitIp", "FirefoxVpn")
-                true
-            } else {
-                lastErrorMessage = "Firefox VPN data-plane check failed (edge rejected CONNECT or ProxyPass expired/quota exceeded)"
-                LogRepository.e("[FirefoxVpn] $lastErrorMessage", "FirefoxVpn")
-                stopInternal()
-                false
-            }
+            error("No Firefox proxy carried traffic through the primary tunnel")
         } catch (e: Exception) {
-            lastErrorMessage = "Firefox VPN startup failed: ${e.message}"
+            lastErrorMessage = e.message ?: "Firefox exit startup failed"
             LogRepository.e("[FirefoxVpn] $lastErrorMessage", "FirefoxVpn")
-            stopInternal()
+            stop()
             false
         }
     }
 
     @Synchronized
     fun stop() {
-        stopInternal()
-    }
-
-    private fun stopInternal() {
-        val wasRunning = isRunning.getAndSet(false)
+        isRunning.set(false)
         verifiedExitIp = null
-        runCatching { renewalThread?.interrupt() }
+        renewalThread?.interrupt()
         renewalThread = null
-        runCatching { socksServerSocket?.close() }
-        socksServerSocket = null
-        runCatching { httpServerSocket?.close() }
-        httpServerSocket = null
-        runCatching { udpRelaySocket?.close() }
-        udpRelaySocket = null
-        runCatching { activeH2Session?.close() }
-        activeH2Session = null
-        if (wasRunning) {
-            LogRepository.i("[FirefoxVpn] Exit node stopped.", "FirefoxVpn")
-        }
+        runCatching { socksServerSocket?.close() }; socksServerSocket = null
+        runCatching { httpServerSocket?.close() }; httpServerSocket = null
+        runCatching { udpRelaySocket?.close() }; udpRelaySocket = null
+        clients.forEach { runCatching { it.close() } }
+        synchronized(sessionLock) { session?.close(); session = null; currentEdge = null }
+        currentProxyPass = ""
     }
 
-    fun isHealthy(): Boolean =
-        isRunning.get() && activeH2Session?.isAlive() == true && probePort("127.0.0.1", localListenPort)
+    fun isHealthy() = isRunning.get() && verifiedExitIp != null && session?.isAlive() == true && socksServerSocket?.isClosed == false
 
-    @Synchronized
-    private fun ensureActiveSession(): H2ConnectSession? {
-        val current = activeH2Session
-        if (current != null && current.isAlive()) return current
-        if (!isRunning.get()) return null
-
-        val session = H2ConnectSession(
-            edgeHost = currentEdgeHost,
-            edgePort = currentEdgePort,
-            socksHost = primarySocksHost,
-            socksPort = primarySocksPort,
-            proxyPassProvider = { currentProxyPass }
-        )
-        return if (session.connect()) {
-            activeH2Session = session
-            session
-        } else {
-            session.close()
+    private fun openStream(host: String, port: Int): ConnectPipe? {
+        return try {
+            val active = synchronized(sessionLock) {
+                if (!isRunning.get()) return null
+                session?.takeIf { it.isAlive() } ?: run {
+                    if (verifiedExitIp == null) return null
+                    session?.close()
+                    connect(currentEdge ?: return null).also { session = it }
+                }
+            }
+            active.open(host, port)
+        } catch (e: ConnectRejected) {
+            rejected = e
+            LogRepository.w("[FirefoxVpn] ${e.message}", "FirefoxVpn")
             null
+        } catch (_: Exception) { null }
+    }
+
+    private fun startProxyPassRenewalLoop() {
+        renewalThread = thread(isDaemon = true, name = "FirefoxVPN-PassRenewal") {
+            try {
+                while (isRunning.get()) {
+                    Thread.sleep(240_000L)
+                    val refreshed = runCatching { getPass(true) }.getOrNull()
+                    if (Thread.currentThread().isInterrupted || !isRunning.get()) break
+                    if (!refreshed.isNullOrBlank()) currentProxyPass = refreshed
+                }
+            } catch (_: InterruptedException) { }
         }
     }
 
-    private fun startProxyPassRenewalLoop(rawToken: String) {
-        renewalThread = thread(start = true, isDaemon = true, name = "FirefoxVPN-PassRenewal") {
-            while (isRunning.get()) {
-                try {
-                    Thread.sleep(240_000L) // Renew every 4 minutes (Guardian passes expire in 10 minutes)
-                    if (!isRunning.get()) break
-                    val refreshed = resolveLiveProxyPassJwt(rawToken, primarySocksHost, primarySocksPort, forceRefresh = true)
-                    if (!refreshed.isNullOrBlank()) {
-                        currentProxyPass = refreshed
-                        LogRepository.i("[FirefoxVpn] Renewed Guardian ProxyPass JWT in-place.", "FirefoxVpn")
-                    }
-                } catch (_: InterruptedException) {
-                    break
-                } catch (_: Exception) {}
-            }
-        }
-    }
-
-    // =========================================================================
-    // DATA PLANE: HTTP/2 (`ALPN h2`) MULTIPLEXED CONNECT + SOCKS5 + DoH
-    // =========================================================================
-
-    private class H2ConnectSession(
-        val edgeHost: String,
-        val edgePort: Int,
-        val socksHost: String,
-        val socksPort: Int,
-        val proxyPassProvider: () -> String
-    ) {
-        @Volatile var negotiatedProtocol: String = "h2"
-            private set
-
-        private var sslSocket: SSLSocket? = null
-        private var rawIn: DataInputStream? = null
-        private var rawOut: OutputStream? = null
-        private val writeLock = Any()
-        private val closed = AtomicBoolean(false)
-        private val nextStreamId = AtomicInteger(1)
-        private val streams = ConcurrentHashMap<Int, H2Stream>()
-
-        fun isAlive(): Boolean = !closed.get() && sslSocket?.isClosed == false && sslSocket?.isConnected == true
-
-        fun connect(): Boolean {
-            return try {
-                val underlying = dialViaSocks5(socksHost, socksPort, edgeHost, edgePort, 12_000) ?: return false
-                underlying.tcpNoDelay = true
-                underlying.keepAlive = true
-                underlying.soTimeout = 0
-
-                val sslContext = SSLContext.getInstance("TLS")
-                sslContext.init(null, null, null)
-                val ssl = (sslContext.socketFactory.createSocket(underlying, edgeHost, edgePort, true) as SSLSocket).apply {
-                    val params = sslParameters
-                    runCatching { params.serverNames = listOf(SNIHostName(edgeHost)) }
-                    runCatching { params.applicationProtocols = arrayOf("h2", "http/1.1") }
-                    sslParameters = params
-                    soTimeout = 15_000
-                }
-
-                ssl.startHandshake()
-                ssl.soTimeout = 0
-                val alpn = runCatching { ssl.applicationProtocol }.getOrNull()
-                negotiatedProtocol = if (alpn.isNullOrBlank() || alpn == "http/1.1") "http/1.1" else "h2"
-
-                sslSocket = ssl
-                rawIn = DataInputStream(BufferedInputStream(ssl.inputStream, 65536))
-                rawOut = BufferedOutputStream(ssl.outputStream, 65536)
-
-                if (negotiatedProtocol == "h2") {
-                    sendH2PrefaceAndSettings()
-                    startH2ReaderLoop()
-                }
-                true
-            } catch (e: Exception) {
-                LogRepository.w("[FirefoxVpn] Edge TLS handshake to $edgeHost:$edgePort failed: ${e.message}", "FirefoxVpn")
-                close()
-                false
-            }
-        }
-
-        private fun sendH2PrefaceAndSettings() {
-            synchronized(writeLock) {
-                val out = rawOut ?: return
-                out.write("PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n".toByteArray(Charsets.US_ASCII))
-                // SETTINGS: ENABLE_PUSH=0, INITIAL_WINDOW_SIZE=16MiB, MAX_FRAME_SIZE=16384
-                val settingsPayload = byteArrayOf(
-                    0x00, 0x02, 0x00, 0x00, 0x00, 0x00,
-                    0x00, 0x04, 0x01, 0x00, 0x00, 0x00,
-                    0x00, 0x05, 0x00, 0x00, 0x40, 0x00
-                )
-                writeFrameLocked(out, type = 0x04, flags = 0x00, streamId = 0, payload = settingsPayload)
-                // Connection WINDOW_UPDATE +16MiB
-                writeFrameLocked(out, type = 0x08, flags = 0x00, streamId = 0, payload = byteArrayOf(0x01, 0x00, 0x00, 0x00))
-                out.flush()
-            }
-        }
-
-        private fun startH2ReaderLoop() {
-            thread(start = true, isDaemon = true, name = "FirefoxVPN-H2Reader") {
-                val input = rawIn ?: return@thread
-                try {
-                    while (!closed.get()) {
-                        val b0 = input.read()
-                        if (b0 < 0) break
-                        val b1 = input.readUnsignedByte()
-                        val b2 = input.readUnsignedByte()
-                        val length = ((b0 and 0xFF) shl 16) or (b1 shl 8) or b2
-                        val type = input.readUnsignedByte()
-                        val flags = input.readUnsignedByte()
-                        val streamId = input.readInt() and 0x7FFFFFFF
-
-                        val payload = ByteArray(length)
-                        if (length > 0) input.readFully(payload)
-
-                        when (type) {
-                            0x00 -> { // DATA
-                                var dataOffset = 0
-                                var dataLen = length
-                                if ((flags and 0x08) != 0 && length > 0) {
-                                    val padLen = payload[0].toInt() and 0xFF
-                                    dataOffset = 1
-                                    dataLen = (length - 1 - padLen).coerceAtLeast(0)
-                                }
-                                if (dataLen > 0) {
-                                    streams[streamId]?.onData(payload.copyOfRange(dataOffset, dataOffset + dataLen))
-                                }
-                                if (length > 0) {
-                                    sendWindowUpdate(0, length)
-                                    if (streamId != 0) sendWindowUpdate(streamId, length)
-                                }
-                                if ((flags and 0x01) != 0) {
-                                    streams[streamId]?.onRemoteClose()
-                                }
-                            }
-                            0x01 -> { // HEADERS
-                                var hdrOffset = 0
-                                var hdrLen = length
-                                if ((flags and 0x08) != 0 && hdrLen > 0) {
-                                    val padLen = payload[0].toInt() and 0xFF
-                                    hdrOffset += 1
-                                    hdrLen = (hdrLen - 1 - padLen).coerceAtLeast(0)
-                                }
-                                if ((flags and 0x20) != 0 && hdrLen >= 5) {
-                                    hdrOffset += 5
-                                    hdrLen -= 5
-                                }
-                                val status = decodeH2Status(payload, hdrOffset, hdrLen)
-                                streams[streamId]?.onHeaders(status)
-                                if ((flags and 0x01) != 0) {
-                                    streams[streamId]?.onRemoteClose()
-                                }
-                            }
-                            0x03 -> { // RST_STREAM
-                                streams.remove(streamId)?.onReset()
-                            }
-                            0x04 -> { // SETTINGS
-                                if ((flags and 0x01) == 0) {
-                                    synchronized(writeLock) {
-                                        rawOut?.let {
-                                            writeFrameLocked(it, type = 0x04, flags = 0x01, streamId = 0, payload = ByteArray(0))
-                                            it.flush()
-                                        }
-                                    }
-                                }
-                            }
-                            0x06 -> { // PING
-                                if ((flags and 0x01) == 0 && payload.size == 8) {
-                                    synchronized(writeLock) {
-                                        rawOut?.let {
-                                            writeFrameLocked(it, type = 0x06, flags = 0x01, streamId = 0, payload = payload)
-                                            it.flush()
-                                        }
-                                    }
-                                }
-                            }
-                            0x07 -> { // GOAWAY
-                                break
-                            }
-                        }
-                    }
-                } catch (_: Exception) {
-                } finally {
-                    close()
-                }
-            }
-        }
-
-        fun openConnectStream(targetHost: String, targetPort: Int, timeoutMs: Long = 10_000L): H2Stream? {
-            if (!isAlive()) return null
-            val authority = if (targetHost.contains(":") && !targetHost.startsWith("[")) {
-                "[$targetHost]:$targetPort"
-            } else {
-                "$targetHost:$targetPort"
-            }
-
-            for (scheme in listOf("ProxyPass", "Bearer")) {
-                val streamId = nextStreamId.getAndAdd(2)
-                val stream = H2Stream(streamId, this)
-                streams[streamId] = stream
-
-                val tokenVal = proxyPassProvider().trim()
-                val authHeaderVal = if (tokenVal.startsWith("ProxyPass ", ignoreCase = true) || tokenVal.startsWith("Bearer ", ignoreCase = true)) {
-                    tokenVal
-                } else {
-                    "$scheme $tokenVal"
-                }
-                val out = ByteArrayOutputStream(256)
-                writeHpackLiteralHeader(out, ":method", "CONNECT")
-                writeHpackLiteralHeader(out, ":authority", authority)
-                writeHpackLiteralHeader(out, "proxy-authorization", authHeaderVal)
-                writeHpackLiteralHeader(out, "user-agent", MOZILLA_VPN_UA)
-                val hpack = out.toByteArray()
-
-                try {
-                    synchronized(writeLock) {
-                        val raw = rawOut ?: throw IllegalStateException("H2 output closed")
-                        writeFrameLocked(raw, type = 0x01, flags = 0x04, streamId = streamId, payload = hpack)
-                        raw.flush()
-                    }
-                } catch (_: Exception) {
-                    streams.remove(streamId)
-                    return null
-                }
-
-                val status = stream.awaitResponseStatus(timeoutMs)
-                if (status in 200..299) {
-                    return stream
-                }
-                streams.remove(streamId)
-                sendRstStream(streamId)
-                if (status != 407 && status != 401) {
-                    LogRepository.w("[FirefoxVpn] Edge CONNECT to $authority rejected with HTTP status $status", "FirefoxVpn")
-                    return null
-                }
-            }
-            LogRepository.w("[FirefoxVpn] Edge CONNECT to $authority rejected after auth attempts", "FirefoxVpn")
-            return null
-        }
-
-        fun sendDataFrame(streamId: Int, data: ByteArray, offset: Int, length: Int, endStream: Boolean) {
-            var pos = offset
-            var remaining = length
-            synchronized(writeLock) {
-                val out = rawOut ?: throw IllegalStateException("H2 output closed")
-                if (remaining == 0 && endStream) {
-                    writeFrameLocked(out, type = 0x00, flags = 0x01, streamId = streamId, payload = ByteArray(0))
-                    out.flush()
-                    return
-                }
-                while (remaining > 0) {
-                    val chunk = minOf(14000, remaining)
-                    val isLast = (remaining - chunk == 0) && endStream
-                    val flags = if (isLast) 0x01 else 0x00
-                    val frameBytes = data.copyOfRange(pos, pos + chunk)
-                    writeFrameLocked(out, type = 0x00, flags = flags, streamId = streamId, payload = frameBytes)
-                    pos += chunk
-                    remaining -= chunk
-                }
-                out.flush()
-            }
-        }
-
-        fun sendWindowUpdate(streamId: Int, increment: Int) {
-            if (increment <= 0) return
-            val inc = increment and 0x7FFFFFFF
-            val payload = byteArrayOf(
-                ((inc ushr 24) and 0x7F).toByte(),
-                ((inc ushr 16) and 0xFF).toByte(),
-                ((inc ushr 8) and 0xFF).toByte(),
-                (inc and 0xFF).toByte()
-            )
-            runCatching {
-                synchronized(writeLock) {
-                    val out = rawOut ?: return
-                    writeFrameLocked(out, type = 0x08, flags = 0x00, streamId = streamId, payload = payload)
-                    out.flush()
-                }
-            }
-        }
-
-        fun sendRstStream(streamId: Int) {
-            streams.remove(streamId)
-            val payload = byteArrayOf(0x00, 0x00, 0x00, 0x08)
-            runCatching {
-                synchronized(writeLock) {
-                    val out = rawOut ?: return
-                    writeFrameLocked(out, type = 0x03, flags = 0x00, streamId = streamId, payload = payload)
-                    out.flush()
-                }
-            }
-        }
-
-        private fun writeFrameLocked(out: OutputStream, type: Int, flags: Int, streamId: Int, payload: ByteArray) {
-            val len = payload.size
-            val sid = streamId and 0x7FFFFFFF
-            val header = byteArrayOf(
-                ((len ushr 16) and 0xFF).toByte(),
-                ((len ushr 8) and 0xFF).toByte(),
-                (len and 0xFF).toByte(),
-                (type and 0xFF).toByte(),
-                (flags and 0xFF).toByte(),
-                ((sid ushr 24) and 0x7F).toByte(),
-                ((sid ushr 16) and 0xFF).toByte(),
-                ((sid ushr 8) and 0xFF).toByte(),
-                (sid and 0xFF).toByte()
-            )
-            out.write(header)
-            if (len > 0) out.write(payload)
-        }
-
-        fun close() {
-            if (closed.getAndSet(true)) return
-            streams.values.forEach { it.onReset() }
-            streams.clear()
-            runCatching { sslSocket?.close() }
-            sslSocket = null
-        }
-    }
-
-    private class H2Stream(
-        val streamId: Int,
-        private val session: H2ConnectSession
-    ) {
-        private val statusQueue = LinkedBlockingQueue<Int>(1)
-        private val dataQueue = LinkedBlockingQueue<ByteArray>(2048)
-        private val eofSentinel = ByteArray(0)
-        private val closed = AtomicBoolean(false)
-
-        fun onHeaders(status: Int) {
-            statusQueue.offer(status)
-        }
-
-        fun onData(bytes: ByteArray) {
-            if (!closed.get() && bytes.isNotEmpty()) {
-                dataQueue.offer(bytes)
-            }
-        }
-
-        fun onRemoteClose() {
-            dataQueue.offer(eofSentinel)
-        }
-
-        fun onReset() {
-            closed.set(true)
-            statusQueue.offer(-1)
-            dataQueue.offer(eofSentinel)
-        }
-
-        fun awaitResponseStatus(timeoutMs: Long): Int {
-            return try {
-                statusQueue.poll(timeoutMs, TimeUnit.MILLISECONDS) ?: -1
-            } catch (_: Exception) {
-                -1
-            }
-        }
-
-        fun readChunk(timeoutMs: Long = 120_000L): ByteArray? {
-            if (closed.get() && dataQueue.isEmpty()) return null
-            val chunk = try {
-                dataQueue.poll(timeoutMs, TimeUnit.MILLISECONDS)
-            } catch (_: Exception) {
-                null
-            } ?: return null
-            if (chunk === eofSentinel || chunk.isEmpty()) {
-                closed.set(true)
-                return null
-            }
-            return chunk
-        }
-
-        fun write(data: ByteArray, offset: Int = 0, length: Int = data.size) {
-            if (closed.get()) throw IllegalStateException("Stream $streamId closed")
-            session.sendDataFrame(streamId, data, offset, length, endStream = false)
-        }
-
-        fun close() {
-            if (closed.getAndSet(true)) return
-            runCatching { session.sendDataFrame(streamId, ByteArray(0), 0, 0, endStream = true) }
-            session.sendRstStream(streamId)
+    private fun serve(client: Socket, handle: (Socket) -> Unit) {
+        clients.add(client)
+        executor.execute {
+            try { if (isRunning.get()) handle(client) } finally { clients.remove(client); client.close() }
         }
     }
 
@@ -659,7 +196,7 @@ class FirefoxVpnExitTunnel(
                 } catch (_: Exception) {
                     break
                 }
-                executor.execute { handleSocks5Client(client) }
+                serve(client, ::handleSocks5Client)
             }
         }
     }
@@ -721,14 +258,7 @@ class FirefoxVpnExitTunnel(
                         return
                     }
 
-                    val session = ensureActiveSession()
-                    if (session == null) {
-                        out.write(byteArrayOf(0x05, 0x04, 0x00, 0x01, 0, 0, 0, 0, 0, 0))
-                        out.flush()
-                        return
-                    }
-
-                    val stream = session.openConnectStream(targetHost, targetPort)
+                    val stream = openStream(targetHost, targetPort)
                     if (stream == null) {
                         out.write(byteArrayOf(0x05, 0x05, 0x00, 0x01, 0, 0, 0, 0, 0, 0))
                         out.flush()
@@ -738,7 +268,7 @@ class FirefoxVpnExitTunnel(
                     out.write(byteArrayOf(0x05, 0x00, 0x00, 0x01, 127, 0, 0, 1, 0, 0))
                     out.flush()
                     client.soTimeout = 0
-                    pipeClientAndH2Stream(client, ins, out, stream)
+                    pipeClient(client, ins, out, stream)
                 }
                 0x03 -> { // UDP ASSOCIATE
                     val relayPort = udpRelaySocket?.localPort ?: 0
@@ -772,32 +302,25 @@ class FirefoxVpnExitTunnel(
         }
     }
 
-    private fun pipeClientAndH2Stream(client: Socket, ins: InputStream, out: OutputStream, stream: H2Stream) {
-        val downThread = thread(start = true, isDaemon = true) {
-            try {
-                while (isRunning.get() && !client.isClosed) {
-                    val chunk = stream.readChunk(120_000L) ?: break
-                    out.write(chunk)
-                    out.flush()
-                }
-            } catch (_: Exception) {
-            } finally {
-                runCatching { client.shutdownOutput() }
+    private fun pipeClient(client: Socket, ins: InputStream, out: OutputStream, stream: ConnectPipe) {
+        fun pump(input: InputStream, output: OutputStream) {
+            val buf = ByteArray(16 * 1024)
+            while (isRunning.get()) {
+                val count = input.read(buf)
+                if (count < 0) break
+                output.write(buf, 0, count)
+                output.flush()
             }
         }
-
-        try {
-            val buf = ByteArray(14000)
-            while (isRunning.get() && !client.isClosed) {
-                val n = ins.read(buf)
-                if (n <= 0) break
-                stream.write(buf, 0, n)
+        stream.use {
+            val down = thread(isDaemon = true, name = "FirefoxVPN-down") {
+                try { pump(stream.input, out) } catch (_: Exception) { }
+                finally { runCatching { client.shutdownOutput() } }
             }
-        } catch (_: Exception) {
-        } finally {
-            stream.close()
-            runCatching { downThread.join(2000) }
-            runCatching { client.close() }
+            pump(ins, stream.output)
+            // A client FIN is not a stream cancellation: the response may still be in flight.
+            stream.finishOutput()
+            down.join(120_000)
         }
     }
 
@@ -901,7 +424,7 @@ class FirefoxVpnExitTunnel(
                 } catch (_: Exception) {
                     break
                 }
-                executor.execute { handleHttpProxyClient(client) }
+                serve(client, ::handleHttpProxyClient)
             }
         }
     }
@@ -925,17 +448,8 @@ class FirefoxVpnExitTunnel(
                 out.flush()
                 return
             }
-            val hostPort = parts[1]
-            val targetHost = hostPort.substringBefore(":")
-            val targetPort = hostPort.substringAfter(":", "443").toIntOrNull() ?: 443
-
-            val session = ensureActiveSession() ?: run {
-                out.write("HTTP/1.1 502 Bad Gateway\r\n\r\n".toByteArray())
-                out.flush()
-                return
-            }
-
-            val stream = session.openConnectStream(targetHost, targetPort) ?: run {
+            val target = HostPort.parse(parts[1])
+            val stream = openStream(target.host, target.port) ?: run {
                 out.write("HTTP/1.1 502 Bad Gateway\r\n\r\n".toByteArray())
                 out.flush()
                 return
@@ -944,85 +458,10 @@ class FirefoxVpnExitTunnel(
             out.write("HTTP/1.1 200 Connection Established\r\n\r\n".toByteArray())
             out.flush()
             client.soTimeout = 0
-            pipeClientAndH2Stream(client, ins, out, stream)
+            pipeClient(client, ins, out, stream)
         } catch (_: Exception) {
         } finally {
             runCatching { client.close() }
-        }
-    }
-
-    private fun verifyDataPlaneWithRetry(socksPort: Int, maxAttempts: Int = 4): String? {
-        for (attempt in 1..maxAttempts) {
-            if (!isRunning.get()) return null
-            val ip = verifyDataPlane(socksPort)
-            if (ip != null) return ip
-            if (attempt < maxAttempts) Thread.sleep(800)
-        }
-        return null
-    }
-
-    private fun verifyDataPlane(socksPort: Int): String? {
-        for ((ipBytes, hostHdr) in listOf(
-            byteArrayOf(1, 1, 1, 1) to "1.1.1.1",
-            byteArrayOf(1, 0, 0, 1) to "1.0.0.1"
-        )) {
-            try {
-                Socket().use { socket ->
-                    socket.soTimeout = 6000
-                    socket.connect(InetSocketAddress("127.0.0.1", socksPort), 2500)
-                    val out = socket.getOutputStream()
-                    val input = socket.getInputStream()
-                    out.write(byteArrayOf(0x05, 0x01, 0x00))
-                    out.flush()
-                    val authResp = ByteArray(2)
-                    readFully(input, authResp)
-                    if (authResp[0] == 0x05.toByte() && authResp[1] == 0x00.toByte()) {
-                        val req = byteArrayOf(0x05, 0x01, 0x00, 0x01, ipBytes[0], ipBytes[1], ipBytes[2], ipBytes[3], 0x00, 0x50)
-                        out.write(req)
-                        out.flush()
-                        val connResp = ByteArray(4)
-                        readFully(input, connResp)
-                        if (connResp[1] == 0x00.toByte()) {
-                            when (connResp[3]) {
-                                0x01.toByte() -> readFully(input, ByteArray(4 + 2))
-                                0x03.toByte() -> {
-                                    val len = input.read()
-                                    if (len > 0) readFully(input, ByteArray(len + 2))
-                                }
-                                0x04.toByte() -> readFully(input, ByteArray(16 + 2))
-                            }
-                            val httpReq = "GET /cdn-cgi/trace HTTP/1.1\r\nHost: $hostHdr\r\nUser-Agent: AetherST/2.5\r\nConnection: close\r\n\r\n"
-                            out.write(httpReq.toByteArray(Charsets.US_ASCII))
-                            out.flush()
-                            val text = input.bufferedReader(Charsets.US_ASCII).readText()
-                            val ip = Regex("""(?m)^ip=(.+)$""").find(text)?.groupValues?.get(1)?.trim()
-                            val loc = Regex("""(?m)^loc=(.+)$""").find(text)?.groupValues?.get(1)?.trim()?.uppercase()
-                            if (!ip.isNullOrBlank() && loc != "IR") {
-                                return ip
-                            }
-                        }
-                    }
-                }
-            } catch (_: Exception) {}
-        }
-        return null
-    }
-
-    private fun probePort(host: String, port: Int): Boolean {
-        return runCatching {
-            Socket().use {
-                it.connect(InetSocketAddress(host, port), 800)
-                true
-            }
-        }.getOrDefault(false)
-    }
-
-    private fun readFully(stream: InputStream, buffer: ByteArray) {
-        var offset = 0
-        while (offset < buffer.size) {
-            val count = stream.read(buffer, offset, buffer.size - offset)
-            if (count < 0) throw java.io.EOFException("Premature end of stream")
-            offset += count
         }
     }
 
@@ -1201,16 +640,8 @@ class FirefoxVpnExitTunnel(
                 rawCc == "UK" -> "GB"
                 else -> rawCc
             }
-            if (!explicitHostPort.isNullOrBlank()) {
-                val h = explicitHostPort.substringBefore(":").trim()
-                val pt = explicitHostPort.substringAfter(":", "443").toIntOrNull() ?: 443
-                if (h.isNotBlank()) {
-                    results.add(EdgeEndpoint(h, pt, targetCc))
-                }
-            }
-
             val fetched = runCatching {
-                val client = buildClient(socksHost, socksPort, timeoutSec = 4)
+                val client = buildClient(socksHost, socksPort, timeoutSec = 4, requirePrimary = true)
                 val req = Request.Builder()
                     .url(REMOTE_SETTINGS_URL)
                     .header("User-Agent", MOZILLA_VPN_UA)
@@ -1262,6 +693,8 @@ class FirefoxVpnExitTunnel(
                 }
             }.getOrDefault(emptyList())
 
+            // Only provider-discovered endpoints (or the built-in Mozilla edges below) may receive a pass.
+            fetched.firstOrNull { "${it.host}:${it.port}".equals(explicitHostPort, ignoreCase = true) }?.let(results::add)
             if (fetched.isNotEmpty()) {
                 results.addAll(fetched.filter { it.countryCode.equals(targetCc, ignoreCase = true) })
                 results.addAll(fetched.filter { it.countryCode.equals("REC", ignoreCase = true) })
@@ -1269,7 +702,7 @@ class FirefoxVpnExitTunnel(
                 results.addAll(fetched)
             }
 
-            val ccLower = targetCc.lowercase()
+            val ccLower = targetCc.takeIf { it.matches(Regex("[A-Z]{2}")) }?.lowercase() ?: "us"
             results.addAll(
                 listOf(
                     EdgeEndpoint("$ccLower.m1.fastly-masque.net", 443, targetCc),
@@ -1336,7 +769,7 @@ class FirefoxVpnExitTunnel(
                 return cachedJwt
             }
 
-            val client = buildClient(socksHost, socksPort, timeoutSec = 15)
+            val client = buildClient(socksHost, socksPort, timeoutSec = 15, requirePrimary = true)
 
             val currentOAuth = oauthAccessToken
             if (!currentOAuth.isNullOrBlank()) {
@@ -1672,149 +1105,23 @@ class FirefoxVpnExitTunnel(
             throw IllegalStateException("FxA OAuth token exchange failed ($lastErr)")
         }
 
-        /**
-         * Mints the 10-minute Guardian ProxyPass JWT from `GET https://vpn.mozilla.org/api/v1/fpn/token`
-         * using `User-Agent: MozillaVPN/2.35.0 (sys:linux; iap:true)` and auto-activating via
-         * `POST https://vpn.mozilla.org/api/v1/fpn/activate` on HTTP 401/403.
-         */
-        private fun requestGuardianProxyPass(client: OkHttpClient, fxaAccessToken: String): String {
-            val mediaJson = "application/json; charset=utf-8".toMediaType()
-            val tokenUrl = "$GUARDIAN_API_BASE/api/v1/fpn/token"
-            val activateUrl = "$GUARDIAN_API_BASE/api/v1/fpn/activate"
-
-            var lastStatus = -1
-            var lastBody = ""
-
-            for (attempt in 1..2) {
-                val req = Request.Builder()
-                    .url(tokenUrl)
-                    .header("Authorization", "Bearer $fxaAccessToken")
-                    .header("User-Agent", MOZILLA_VPN_UA)
-                    .header("Accept", "application/json")
-                    .get()
-                    .build()
-
-                val jwt = runCatching {
-                    client.newCall(req).execute().use { resp ->
-                        lastStatus = resp.code
-                        lastBody = resp.body?.string().orEmpty()
-                        if (resp.isSuccessful) {
-                            val obj = jsonParser.parseToJsonElement(lastBody).jsonObject
-                            obj["token"]?.jsonPrimitive?.content
-                                ?: obj["proxypass"]?.jsonPrimitive?.content
-                                ?: obj["proxy_pass"]?.jsonPrimitive?.content
-                        } else null
-                    }
-                }.getOrNull()
-
-                if (!jwt.isNullOrBlank()) return jwt
-
-                if ((lastStatus == 401 || lastStatus == 403) && attempt == 1) {
-                    LogRepository.i("[FirefoxVpn] Guardian returned HTTP $lastStatus; activating Firefox VPN entitlement via POST /api/v1/fpn/activate...", "FirefoxVpn")
-                    val actReq = Request.Builder()
-                        .url(activateUrl)
-                        .header("Authorization", "Bearer $fxaAccessToken")
-                        .header("User-Agent", MOZILLA_VPN_UA)
-                        .header("Accept", "application/json")
-                        .post("{}".toRequestBody(mediaJson))
-                        .build()
-                    runCatching { client.newCall(actReq).execute().close() }
-                    continue
-                }
-                break
-            }
-
-            throw IllegalStateException("Guardian /api/v1/fpn/token rejected request (HTTP $lastStatus: ${lastBody.take(120)})")
-        }
-
-        private class Socks5RemoteDnsSocket(
-            private val socksHost: String,
-            private val socksPort: Int
-        ) : Socket() {
-            override fun connect(endpoint: java.net.SocketAddress?, timeout: Int) {
-                val inetEp = endpoint as? InetSocketAddress
-                    ?: throw java.io.IOException("Invalid endpoint: $endpoint")
-                val targetHost = inetEp.hostString.ifBlank { inetEp.hostName }
-                val targetPort = inetEp.port
-                val effectiveTimeout = if (timeout > 0) timeout else 12_000
-
-                super.connect(InetSocketAddress(socksHost, socksPort), effectiveTimeout)
-                soTimeout = effectiveTimeout
-                tcpNoDelay = true
-
-                val ins = DataInputStream(getInputStream())
-                val out = getOutputStream()
-                out.write(byteArrayOf(0x05, 0x01, 0x00))
-                out.flush()
-                if (ins.read() != 0x05 || ins.read() != 0x00) {
-                    close()
-                    throw java.io.IOException("SOCKS5 greeting rejected by $socksHost:$socksPort")
-                }
-
-                val hostBytes = targetHost.toByteArray(Charsets.UTF_8)
-                val req = ByteArray(7 + hostBytes.size)
-                req[0] = 0x05; req[1] = 0x01; req[2] = 0x00; req[3] = 0x03 // ATYP = 0x03 (Domain Name)
-                req[4] = hostBytes.size.toByte()
-                System.arraycopy(hostBytes, 0, req, 5, hostBytes.size)
-                req[5 + hostBytes.size] = ((targetPort ushr 8) and 0xFF).toByte()
-                req[6 + hostBytes.size] = (targetPort and 0xFF).toByte()
-                out.write(req)
-                out.flush()
-
-                val rVer = ins.read()
-                val rRep = ins.read()
-                ins.read()
-                val rAtyp = ins.read()
-                if (rVer != 0x05 || rRep != 0x00) {
-                    close()
-                    throw java.io.IOException("SOCKS5 CONNECT to $targetHost:$targetPort failed (rep=$rRep)")
-                }
-                val skip = when (rAtyp) {
-                    0x01 -> 6
-                    0x04 -> 18
-                    0x03 -> ins.readUnsignedByte() + 2
-                    else -> 6
-                }
-                ins.readFully(ByteArray(skip))
+        private fun requestGuardianProxyPass(client: OkHttpClient, fxaAccessToken: String): String? {
+            val req = Request.Builder().url("$GUARDIAN_API_BASE/api/v1/fpn/token")
+                .header("Authorization", "Bearer $fxaAccessToken").header("User-Agent", MOZILLA_VPN_UA)
+                .header("Accept", "application/json").build()
+            return client.newCall(req).execute().use { resp ->
+                if (!resp.isSuccessful) throw IllegalStateException("Firefox VPN authorization rejected (HTTP ${resp.code})")
+                val obj = jsonParser.parseToJsonElement(resp.body?.string() ?: return@use null).jsonObject
+                (obj["token"] ?: obj["proxypass"] ?: obj["proxy_pass"])?.jsonPrimitive?.content
             }
         }
 
-        private class Socks5RemoteDnsSocketFactory(
-            private val socksHost: String,
-            private val socksPort: Int
-        ) : javax.net.SocketFactory() {
-            override fun createSocket(): Socket = Socks5RemoteDnsSocket(socksHost, socksPort)
-            override fun createSocket(host: String, port: Int): Socket =
-                Socks5RemoteDnsSocket(socksHost, socksPort).apply { connect(InetSocketAddress.createUnresolved(host, port), 12_000) }
-            override fun createSocket(host: String, port: Int, localHost: InetAddress?, localPort: Int): Socket =
-                createSocket(host, port)
-            override fun createSocket(host: InetAddress, port: Int): Socket =
-                Socks5RemoteDnsSocket(socksHost, socksPort).apply { connect(InetSocketAddress(host, port), 12_000) }
-            override fun createSocket(address: InetAddress, port: Int, localAddress: InetAddress?, localPort: Int): Socket =
-                createSocket(address, port)
-        }
-
-        private fun buildClient(socksHost: String, socksPort: Int, timeoutSec: Long): OkHttpClient {
-            val builder = OkHttpClient.Builder()
-                .connectTimeout(timeoutSec, TimeUnit.SECONDS)
-                .readTimeout(timeoutSec, TimeUnit.SECONDS)
-                .writeTimeout(timeoutSec, TimeUnit.SECONDS)
-
-            val socksListening = runCatching {
-                Socket().use { it.connect(InetSocketAddress(socksHost, socksPort), 300); true }
-            }.getOrDefault(false)
-
-            if (socksListening && socksPort > 0) {
-                // CRITICAL FOR IRAN ISPs: Do NOT use Proxy.Type.SOCKS with OkHttp's default Dns.SYSTEM!
-                // Dns.SYSTEM calls Android's local ISP DNS (before VPN TUN is established), which times out
-                // or returns poisoned 10.10.34.35 for vpn.mozilla.org and accounts.firefox.com.
-                // Instead, return a placeholder InetAddress preserving the hostname and dial via ATYP=0x03!
-                builder.dns(object : okhttp3.Dns {
-                    override fun lookup(hostname: String): List<InetAddress> {
-                        return listOf(InetAddress.getByAddress(hostname, byteArrayOf(1, 1, 1, 1)))
-                    }
-                })
-                builder.socketFactory(Socks5RemoteDnsSocketFactory(socksHost, socksPort))
+        private fun buildClient(socksHost: String, socksPort: Int, timeoutSec: Long, requirePrimary: Boolean = false): OkHttpClient {
+            val builder = OkHttpClient.Builder().callTimeout(timeoutSec, TimeUnit.SECONDS)
+            // OkHttp uses an unresolved destination when the route is SOCKS. In a running chain,
+            // never fall back to a direct account / discovery request when layer 1 disappears.
+            if (requirePrimary || (socksPort > 0 && portListening(socksHost, socksPort))) {
+                builder.proxy(Proxy(Proxy.Type.SOCKS, InetSocketAddress(socksHost, socksPort)))
             }
             return builder.build()
         }
@@ -1888,148 +1195,6 @@ class FirefoxVpnExitTunnel(
                 exp - nowSec > minRemainingSec
             } catch (_: Exception) {
                 false
-            }
-        }
-
-        private fun encodeConnectHeaders(authority: String, proxyPass: String, userAgent: String): ByteArray {
-            val out = ByteArrayOutputStream(256)
-            writeHpackLiteralHeader(out, ":method", "CONNECT")
-            writeHpackLiteralHeader(out, ":authority", authority)
-            writeHpackLiteralHeader(out, "proxy-authorization", "ProxyPass $proxyPass")
-            writeHpackLiteralHeader(out, "user-agent", userAgent)
-            return out.toByteArray()
-        }
-
-        private fun writeHpackLiteralHeader(out: ByteArrayOutputStream, name: String, value: String) {
-            out.write(0x10)
-            val nameBytes = name.lowercase().toByteArray(Charsets.US_ASCII)
-            writeHpackInt(out, nameBytes.size, 7, 0x00)
-            out.write(nameBytes)
-            val valBytes = value.toByteArray(Charsets.US_ASCII)
-            writeHpackInt(out, valBytes.size, 7, 0x00)
-            out.write(valBytes)
-        }
-
-        private fun writeHpackInt(out: ByteArrayOutputStream, value: Int, prefixBits: Int, flagsMask: Int) {
-            val maxPrefix = (1 shl prefixBits) - 1
-            if (value < maxPrefix) {
-                out.write(flagsMask or value)
-            } else {
-                out.write(flagsMask or maxPrefix)
-                var rem = value - maxPrefix
-                while (rem >= 128) {
-                    out.write((rem and 0x7F) or 0x80)
-                    rem = rem ushr 7
-                }
-                out.write(rem)
-            }
-        }
-
-        private fun decodeH2Status(buf: ByteArray, offset: Int, len: Int): Int {
-            if (len <= 0 || offset >= buf.size) return -1
-            val end = minOf(buf.size, offset + len)
-            var pos = offset
-            // Skip any leading HPACK Dynamic Table Size Update instructions (001xxxxx, RFC 7541 Section 6.3)
-            while (pos < end && (buf[pos].toInt() and 0xE0) == 0x20) {
-                val prefix = buf[pos].toInt() and 0x1F
-                pos++
-                if (prefix == 0x1F) {
-                    while (pos < end && (buf[pos].toInt() and 0x80) != 0) pos++
-                    if (pos < end) pos++
-                }
-            }
-            if (pos >= end) pos = offset
-            val b0 = buf[pos].toInt() and 0xFF
-            when (b0) {
-                0x88 -> return 200
-                0x89 -> return 204
-                0x8a -> return 206
-                0x8b -> return 304
-                0x8c -> return 400
-                0x8d -> return 404
-                0x8e -> return 500
-            }
-            // Also scan the first 8 bytes after pos in case another indexed pseudo-header preceded :status
-            for (scan in pos until minOf(end, pos + 8)) {
-                when (buf[scan].toInt() and 0xFF) {
-                    0x88 -> return 200
-                    0x8c -> return 400
-                    0x8d -> return 404
-                    0x8e -> return 500
-                }
-            }
-            val idx = when {
-                (b0 and 0xC0) == 0x40 -> b0 and 0x3F
-                (b0 and 0xF0) == 0x00 || (b0 and 0xF0) == 0x10 -> b0 and 0x0F
-                else -> 0
-            }
-            if (idx in 8..14 && offset + 1 < buf.size) {
-                val lenByte = buf[offset + 1].toInt() and 0xFF
-                val isHuffman = (lenByte and 0x80) != 0
-                val strLen = lenByte and 0x7F
-                if (!isHuffman && strLen == 3 && offset + 5 <= buf.size) {
-                    val s = String(buf, offset + 2, 3, Charsets.US_ASCII)
-                    s.toIntOrNull()?.let { return it }
-                } else if (isHuffman && strLen >= 2 && offset + 2 + strLen <= buf.size) {
-                    val h0 = buf[offset + 2].toInt() and 0xFF
-                    if (h0 == 0x64) return 200
-                }
-            }
-            val ascii = String(buf, offset, minOf(len, buf.size - offset), Charsets.ISO_8859_1)
-            Regex("""\b([2-5]\d{2})\b""").find(ascii)?.groupValues?.get(1)?.toIntOrNull()?.let { return it }
-            return if (b0 == 0x88) 200 else 502
-        }
-
-        private fun dialViaSocks5(
-            socksHost: String,
-            socksPort: Int,
-            targetHost: String,
-            targetPort: Int,
-            timeoutMs: Int
-        ): Socket? {
-            val sock = Socket()
-            return try {
-                sock.connect(InetSocketAddress(socksHost, socksPort), timeoutMs)
-                sock.soTimeout = timeoutMs
-                val ins = DataInputStream(sock.getInputStream())
-                val out = sock.getOutputStream()
-
-                out.write(byteArrayOf(0x05, 0x01, 0x00))
-                out.flush()
-                if (ins.read() != 0x05 || ins.read() != 0x00) {
-                    sock.close()
-                    return null
-                }
-
-                val hostBytes = targetHost.toByteArray(Charsets.UTF_8)
-                val req = ByteArray(7 + hostBytes.size)
-                req[0] = 0x05; req[1] = 0x01; req[2] = 0x00; req[3] = 0x03
-                req[4] = hostBytes.size.toByte()
-                System.arraycopy(hostBytes, 0, req, 5, hostBytes.size)
-                req[5 + hostBytes.size] = ((targetPort ushr 8) and 0xFF).toByte()
-                req[6 + hostBytes.size] = (targetPort and 0xFF).toByte()
-                out.write(req)
-                out.flush()
-
-                val rVer = ins.read()
-                val rRep = ins.read()
-                ins.read()
-                val rAtyp = ins.read()
-                if (rVer != 0x05 || rRep != 0x00) {
-                    sock.close()
-                    return null
-                }
-                val skip = when (rAtyp) {
-                    0x01 -> 6
-                    0x04 -> 18
-                    0x03 -> ins.readUnsignedByte() + 2
-                    else -> 6
-                }
-                ins.readFully(ByteArray(skip))
-                sock
-            } catch (_: Exception) {
-                runCatching { sock.close() }
-                null
             }
         }
 

@@ -239,6 +239,7 @@ class AetherConfigRepository private constructor(private val settings: Settings)
             name = settings.getString("${prefix}custom_wg_name", ""),
             rawConfig = settings.getString("${prefix}custom_wg_raw", ""),
             privateKey = settings.getString("${prefix}custom_wg_privkey", ""),
+            preSharedKey = settings.getString("${prefix}custom_wg_psk", ""),
             addressV4 = settings.getString("${prefix}custom_wg_addr_v4", ""),
             addressV6 = settings.getString("${prefix}custom_wg_addr_v6", ""),
             dns = settings.getString("${prefix}custom_wg_dns", "1.1.1.1"),
@@ -256,6 +257,7 @@ class AetherConfigRepository private constructor(private val settings: Settings)
         settings.putString("${prefix}custom_wg_name", wg.name)
         settings.putString("${prefix}custom_wg_raw", wg.rawConfig)
         settings.putString("${prefix}custom_wg_privkey", wg.privateKey)
+        settings.putString("${prefix}custom_wg_psk", wg.preSharedKey)
         settings.putString("${prefix}custom_wg_addr_v4", wg.addressV4)
         settings.putString("${prefix}custom_wg_addr_v6", wg.addressV6)
         settings.putString("${prefix}custom_wg_dns", wg.dns)

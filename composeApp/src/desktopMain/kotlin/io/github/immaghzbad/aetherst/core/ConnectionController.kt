@@ -74,7 +74,7 @@ actual object ConnectionController {
         private var prevRx = 0L
 
         @Volatile private var tunnelModeStarted = false
-        @Volatile private var activeTargetPort = 2021
+        @Volatile private var exitReady = false
         @Volatile private var isPsiphonActive = false
         @Volatile private var isUserInitiatedStop = false
         @Volatile private var wgExitTunnel: io.github.immaghzbad.aetherst.shared.net.WireGuardExitTunnel? = null
@@ -177,6 +177,7 @@ if (!canReachGatewayOrInternet()) {
             val actualHttpPort = if (configuredHttpPort == coreSocksPort) coreSocksPort + 1 else configuredHttpPort
 
             val needsExitNode = effectiveConfig.exitNodeMode != ExitNodeMode.DIRECT
+            exitReady = false
 
             statusJob?.cancel()
             statusJob = scope.launch {
@@ -192,7 +193,7 @@ if (!canReachGatewayOrInternet()) {
                         if (_status.value != ConnectionStatus.STOPPED && s != ConnectionStatus.STOPPED) {
                             if (s == ConnectionStatus.RUNNING || s == ConnectionStatus.SOCKS_READY || s == ConnectionStatus.DATAPLANE_VALIDATED) {
                                 // Only promote to RUNNING directly if no secondary ExitNode is pending
-                                if (!needsExitNode || activeTargetPort != coreSocksPort) {
+                                if (!needsExitNode || exitReady) {
                                     _status.value = ConnectionStatus.RUNNING
                                 }
                             } else if (_status.value != ConnectionStatus.RECONNECTING) {
@@ -359,16 +360,9 @@ if (!canReachGatewayOrInternet()) {
                 }
             } else if (effectiveConfig.exitNodeMode == ExitNodeMode.FIREFOX_VPN) {
                 _status.value = ConnectionStatus.VALIDATING
-                val binaryPath = runCatching {
-                    io.github.immaghzbad.aetherst.shared.core.getBinaryManager(context).prepareBinary("sing-box")
-                }.getOrNull()
-                val workDir = getSystemUtils(context).getFilesDir()
-                java.io.File(workDir).mkdirs()
                 val tunnel = io.github.immaghzbad.aetherst.shared.net.FirefoxVpnExitTunnel(
                     token = effectiveConfig.firefoxVpnToken,
                     country = effectiveConfig.firefoxVpnCountry,
-                    binaryPath = binaryPath,
-                    workingDir = workDir,
                     primarySocksHost = "127.0.0.1",
                     primarySocksPort = coreSocksPort,
                     localListenPort = effectiveConfig.firefoxVpnPort
@@ -386,7 +380,7 @@ if (!canReachGatewayOrInternet()) {
             }
 
             currentCoroutineContext().ensureActive()
-            activeTargetPort = effectiveTargetPort
+            exitReady = effectiveTargetPort != coreSocksPort
 
             if (effectiveConfig.connectionMode == ConnectionMode.TUNNEL) {
                 startTunnelMode(effectiveConfig, effectiveTargetPort)
@@ -461,6 +455,9 @@ if (!canReachGatewayOrInternet()) {
                     attempt++
                     LogRepository.i("[Controller] Hold & Reconnect attempt $attempt of $maxAttempts...", "Watchdog")
 
+                    exitReady = false
+                    ActiveProxyProvider.customWgPort = null
+                    ActiveProxyProvider.firefoxVpnPort = null
                     try { wgExitTunnel?.stop() } catch (_: Throwable) {}
                     wgExitTunnel = null
                     try { firefoxVpnTunnel?.stop() } catch (_: Throwable) {}
@@ -512,7 +509,8 @@ if (!canReachGatewayOrInternet()) {
                                 } else {
                                     effectiveConfig.customWgConfig
                                 }
-                                if (targetWgCfg.isValid()) {
+                                check(targetWgCfg.isValid()) { "Custom WireGuard config is incomplete" }
+                                run {
                                     val binaryPath = runCatching {
                                         io.github.immaghzbad.aetherst.shared.core.getBinaryManager(context).prepareBinary("sing-box")
                                     }.getOrNull()
@@ -547,16 +545,9 @@ if (!canReachGatewayOrInternet()) {
                                 }
                                 customSocksRelay = relay
                             } else if (effectiveConfig.exitNodeMode == ExitNodeMode.FIREFOX_VPN) {
-                                val binaryPath = runCatching {
-                                    io.github.immaghzbad.aetherst.shared.core.getBinaryManager(context).prepareBinary("sing-box")
-                                }.getOrNull()
-                                val workDir = getSystemUtils(context).getFilesDir()
-                                java.io.File(workDir).mkdirs()
                                 val tunnel = io.github.immaghzbad.aetherst.shared.net.FirefoxVpnExitTunnel(
                                     token = effectiveConfig.firefoxVpnToken,
                                     country = effectiveConfig.firefoxVpnCountry,
-                                    binaryPath = binaryPath,
-                                    workingDir = workDir,
                                     primarySocksHost = "127.0.0.1",
                                     primarySocksPort = coreSocksPort,
                                     localListenPort = effectiveConfig.firefoxVpnPort
@@ -568,6 +559,7 @@ if (!canReachGatewayOrInternet()) {
                                 ActiveProxyProvider.firefoxVpnPort = effectiveConfig.firefoxVpnPort
                             }
 
+                            exitReady = effectiveConfig.exitNodeMode != ExitNodeMode.DIRECT
                             _status.value = ConnectionStatus.RUNNING
                             LogRepository.i("[Controller] Resilient reconnect SUCCESSFUL! Session restored without dropping application sockets.", "Watchdog")
                             return@launch

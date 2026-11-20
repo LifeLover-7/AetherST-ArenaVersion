@@ -402,12 +402,7 @@ class AetherProcessRunner(private val context: PlatformContext) {
             }
             while (isActive && currentAttemptId.get() == attemptId) {
                 val line = proc.readLine() ?: break
-                val effectiveProtocol = if (
-                    config.exitNodeMode == ExitNodeMode.CUSTOM_WG &&
-                    config.customWgConfig.isValid() &&
-                    config.protocol in setOf(AetherProtocol.MASQUE, AetherProtocol.WG, AetherProtocol.GOOL)
-                ) AetherProtocol.GOOL else config.protocol
-                parseOutputLine(line, attemptId, effectiveProtocol, config.exitNodeMode, onCodeRequired)
+                parseOutputLine(line, attemptId, config.protocol, config.exitNodeMode, onCodeRequired)
             }
             inputJob.cancel()
             val exitCode = proc.waitFor()

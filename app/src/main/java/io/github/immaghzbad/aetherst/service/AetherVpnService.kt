@@ -46,7 +46,8 @@ import io.github.immaghzbad.aetherst.shared.model.RoutingMode
 import io.github.immaghzbad.aetherst.shared.model.SocksReadiness
 import io.github.immaghzbad.aetherst.shared.model.TunnelEngine
 import io.github.immaghzbad.aetherst.shared.net.CustomSocks5Relay
-import io.github.immaghzbad.aetherst.shared.net.WireGuardExitTunnel
+import io.github.immaghzbad.aetherst.core.AndroidVpnExit
+import io.github.immaghzbad.aetherst.shared.model.AetherConfig
 import io.github.immaghzbad.aetherst.shared.platform.Bridge
 import io.github.immaghzbad.aetherst.shared.util.WireGuardConfigParser
 import kotlinx.coroutines.CancellationException
@@ -81,8 +82,7 @@ class AetherVpnService : VpnService() {
     private var customSocksRelay: CustomSocks5Relay? = null
     private val exitTunnelLock = Any()
     @Volatile private var exitTunnelNeedsRefresh = false
-    private var wgExitTunnel: WireGuardExitTunnel? = null
-    private var firefoxVpnTunnel: io.github.immaghzbad.aetherst.shared.net.FirefoxVpnExitTunnel? = null
+    private val vpnExit by lazy { AndroidVpnExit(applicationContext) }
 
     private var wakeLock: PowerManager.WakeLock? = null
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
@@ -466,13 +466,7 @@ class AetherVpnService : VpnService() {
                         mtu = effectiveMtu,
                         attemptId = attemptId,
                         settings = hevSettings,
-                        udpMode = if (
-                            ActiveProxyProvider.psiphonProxyUrl != null ||
-                            config.chainProvider == ChainProvider.PSIPHON ||
-                            config.exitNodeMode == ExitNodeMode.PSIPHON_POOL ||
-                            config.exitNodeMode == ExitNodeMode.FIREFOX_VPN ||
-                            config.chainProvider == ChainProvider.TOR
-                        ) "tcp" else config.hevUdpMode
+                        udpMode = hevUdpMode(config)
                     ) == true
                     if (!ok) throw IllegalStateException("HEV engine failed to start mtu=$effectiveMtu")
                     lastHevUpstream = "$targetHost:$targetPort"
@@ -650,11 +644,7 @@ class AetherVpnService : VpnService() {
         startupJob?.cancel()
         stopStatsJob()
 
-        // Immediately signal Layer-2 tunnels to abort any in-progress blocking handshake
-        runCatching { wgExitTunnel?.stop() }
-        runCatching { firefoxVpnTunnel?.stop() }
-        runCatching { customSocksRelay?.stop() }
-
+        // Stopping an exit can wait for network I/O. Never do this on the service main thread.
         scope.launch {
             withTimeoutOrNull(1500.milliseconds) {
                 runCatching { startupJob?.join() }
@@ -708,12 +698,7 @@ class AetherVpnService : VpnService() {
                 socksBridge?.stop()
                 socksBridge = null
                 synchronized(exitTunnelLock) {
-                    wgExitTunnel?.stop()
-                    wgExitTunnel = null
-                    ActiveProxyProvider.customWgPort = null
-                    firefoxVpnTunnel?.stop()
-                    firefoxVpnTunnel = null
-                    ActiveProxyProvider.firefoxVpnPort = null
+                    vpnExit.stop()
                     customSocksRelay?.stop()
                     customSocksRelay = null
                 }
@@ -788,13 +773,7 @@ class AetherVpnService : VpnService() {
                                     mtu = effectiveMtu,
                                     attemptId = activeAttemptId.get(),
                                     settings = hevSettings,
-                                    udpMode = if (
-                                        ActiveProxyProvider.psiphonProxyUrl != null ||
-                                        cfg.chainProvider == ChainProvider.PSIPHON ||
-                                        cfg.exitNodeMode == ExitNodeMode.PSIPHON_POOL ||
-                                        cfg.exitNodeMode == ExitNodeMode.FIREFOX_VPN ||
-                                        cfg.chainProvider == ChainProvider.TOR
-                                    ) "tcp" else cfg.hevUdpMode
+                                    udpMode = hevUdpMode(cfg)
                                 )
                                 stateMutex.withLock {
                                     if (ok) {
@@ -878,7 +857,7 @@ class AetherVpnService : VpnService() {
         val newEngine = HevTun2SocksEngine()
         val maxSafeMtu = if (cfg.exitNodeMode == ExitNodeMode.CUSTOM_WG) 1120 else 1280
         val effectiveMtu = maxSafeMtu.coerceAtMost(cfg.mtu.coerceIn(576, 9000))
-        val ok = newEngine.start(descriptor, host, port, effectiveMtu, activeAttemptId.get(), hevSettings, cfg.hevUdpMode)
+        val ok = newEngine.start(descriptor, host, port, effectiveMtu, activeAttemptId.get(), hevSettings, hevUdpMode(cfg))
         stateMutex.withLock {
             if (ok) {
                 hevEngine = newEngine
@@ -890,13 +869,20 @@ class AetherVpnService : VpnService() {
         }
     }
 
+    private fun hevUdpMode(config: AetherConfig): String = when {
+        config.hevUdpMode == "off" -> "off"
+        config.exitNodeMode.needsVpnExit -> "udp" // RFC 1928 ASSOCIATE, not HEV's UDP-over-TCP extension
+        config.isPsiphonActive() || config.isTorActive() -> "tcp"
+        else -> config.hevUdpMode
+    }
+
     private fun resolveEffectiveSocks(
         config: io.github.immaghzbad.aetherst.shared.model.AetherConfig,
         psiphonUrl: String?,
         forceRefresh: Boolean = false
     ): Pair<String, Int> = synchronized(exitTunnelLock) {
         val torPort = ActiveProxyProvider.torProxyUrl?.substringAfterLast(":")?.toIntOrNull()
-        if (torPort != null) return "127.0.0.1" to torPort
+        if (!config.exitNodeMode.needsVpnExit && torPort != null) return "127.0.0.1" to torPort
 
         when (config.exitNodeMode) {
             ExitNodeMode.DIRECT -> {
@@ -910,45 +896,8 @@ class AetherVpnService : VpnService() {
                     ?: 3080
                 return "127.0.0.1" to poolPort
             }
-            ExitNodeMode.CUSTOM_WG -> {
-                val localPort = 10805
-                val targetWgCfg = if (config.customWgAutoSelect && config.customWgProfiles.isNotEmpty()) {
-                    WireGuardExitTunnel.selectFastestProfile(config.customWgProfiles, config.customWgConfig)
-                } else {
-                    config.customWgConfig
-                }
-                if (targetWgCfg.isValid()) {
-                    if (forceRefresh || wgExitTunnel == null || wgExitTunnel?.isHealthy() != true) {
-                        runCatching { wgExitTunnel?.stop() }
-                        wgExitTunnel = null
-                        val primaryPort = config.socksPort.toIntOrNull() ?: 2021
-                        val binaryFile = io.github.immaghzbad.aetherst.core.BinaryManager.prepareSingBoxBinary(this@AetherVpnService)
-                        val tunnel = WireGuardExitTunnel(
-                            config = targetWgCfg,
-                            binaryPath = binaryFile?.absolutePath,
-                            workingDir = filesDir.absolutePath,
-                            primarySocksHost = "127.0.0.1",
-                            primarySocksPort = primaryPort,
-                            localListenPort = localPort
-                        )
-                        wgExitTunnel = tunnel
-                        val started = runCatching { tunnel.start() }.getOrDefault(false)
-                        if (started && !isUserInitiatedStop) {
-                            ActiveProxyProvider.customWgPort = localPort
-                            LogRepository.i("[VpnService] WireGuard exit node active on port $localPort (Verified IP: ${tunnel.verifiedExitIp})")
-                            return "127.0.0.1" to localPort
-                        } else {
-                            wgExitTunnel = null
-                            val err = tunnel.lastErrorMessage ?: "Layer-2 WireGuard handshake failed"
-                            LogRepository.e("[VpnService] $err")
-                            throw IllegalStateException(err)
-                        }
-                    }
-                    ActiveProxyProvider.customWgPort = localPort
-                    return "127.0.0.1" to localPort
-                } else {
-                    throw IllegalStateException("Custom WireGuard config is incomplete or missing")
-                }
+            ExitNodeMode.CUSTOM_WG, ExitNodeMode.FIREFOX_VPN -> {
+                return "127.0.0.1" to vpnExit.start(config, forceRefresh)
             }
             ExitNodeMode.CUSTOM_SOCKS5 -> {
                 val localPort = 10806
@@ -979,38 +928,7 @@ class AetherVpnService : VpnService() {
                     throw IllegalStateException("Custom SOCKS5 host is blank")
                 }
             }
-            ExitNodeMode.FIREFOX_VPN -> {
-                val localPort = config.firefoxVpnPort
-                if (forceRefresh || firefoxVpnTunnel == null || firefoxVpnTunnel?.isHealthy() != true) {
-                    runCatching { firefoxVpnTunnel?.stop() }
-                    firefoxVpnTunnel = null
-                    val primaryPort = config.socksPort.toIntOrNull() ?: 2021
-                    val binaryFile = io.github.immaghzbad.aetherst.core.BinaryManager.prepareSingBoxBinary(this@AetherVpnService)
-                    val tunnel = io.github.immaghzbad.aetherst.shared.net.FirefoxVpnExitTunnel(
-                        token = config.firefoxVpnToken,
-                        country = config.firefoxVpnCountry,
-                        binaryPath = binaryFile?.absolutePath,
-                        workingDir = filesDir.absolutePath,
-                        primarySocksHost = "127.0.0.1",
-                        primarySocksPort = primaryPort,
-                        localListenPort = localPort
-                    )
-                    firefoxVpnTunnel = tunnel
-                    val started = runCatching { tunnel.start() }.getOrDefault(false)
-                    if (started && !isUserInitiatedStop) {
-                        ActiveProxyProvider.firefoxVpnPort = localPort
-                        LogRepository.i("[VpnService] Firefox VPN exit node active on port $localPort (Verified IP: ${tunnel.verifiedExitIp})")
-                        return "127.0.0.1" to localPort
-                    } else {
-                        firefoxVpnTunnel = null
-                        val err = tunnel.lastErrorMessage ?: "Firefox VPN authentication or data-plane failed"
-                        LogRepository.e("[VpnService] $err")
-                        throw IllegalStateException(err)
-                    }
-                }
-                ActiveProxyProvider.firefoxVpnPort = localPort
-                return "127.0.0.1" to localPort
-            }
+
         }
     }
 

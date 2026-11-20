@@ -42,6 +42,8 @@ class ConnectionController private constructor(context: Context) : ConnectionCon
     private val appContext = context.applicationContext
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val runner = AetherProcessRunner(appContext)
+    private val proxyModeExit = AndroidVpnExit(appContext)
+    @Volatile private var awaitingVpnExit = false
     private val mutex = Mutex()
     private val activeAttemptId = AtomicLong(0)
     private val loginCodeChannel = Channel<String>(Channel.CONFLATED)
@@ -173,8 +175,9 @@ class ConnectionController private constructor(context: Context) : ConnectionCon
                     LogRepository.i("[Controller] Cloak active, routing MASQUE via ${effectiveConfig.peer}")
                 }
             }
-            val psiphonSupported = PsiphonController.isSupported(effectiveConfig) && effectiveConfig.chainProvider == ChainProvider.PSIPHON
-            val torSupported = TorController.isSupported(effectiveConfig) && effectiveConfig.chainProvider == ChainProvider.TOR
+            awaitingVpnExit = effectiveConfig.exitNodeMode.needsVpnExit
+            val psiphonSupported = !awaitingVpnExit && PsiphonController.isSupported(effectiveConfig) && effectiveConfig.chainProvider == ChainProvider.PSIPHON
+            val torSupported = !awaitingVpnExit && TorController.isSupported(effectiveConfig) && effectiveConfig.chainProvider == ChainProvider.TOR
 
             if (psiphonSupported && !effectiveConfig.psiphonOnly) {
                 val coreSocks = effectiveConfig.socksPort.toIntOrNull() ?: 2021
@@ -774,7 +777,7 @@ class ConnectionController private constructor(context: Context) : ConnectionCon
                 runCatching { cleanup(attemptId) }
                 return
             }
-            if (runner.connectionStatus.value != ConnectionStatus.RUNNING) {
+            if (awaitingVpnExit || runner.connectionStatus.value != ConnectionStatus.RUNNING) {
                 LogRepository.e("[Controller] Startup failed: ${e.localizedMessage}")
                 cleanup(attemptId)
                 notifyStatusChanged(appContext, ConnectionStatus.ERROR)
@@ -1064,6 +1067,7 @@ class ConnectionController private constructor(context: Context) : ConnectionCon
     }
 
     fun promoteToRunning() {
+        awaitingVpnExit = false
         notifyStatusChanged(appContext, ConnectionStatus.RUNNING)
         startTimer()
         LogRepository.i("[Controller] Full VPN tunnel (Layer-1 + Layer-2 + TUN) is now RUNNING")
@@ -1072,7 +1076,11 @@ class ConnectionController private constructor(context: Context) : ConnectionCon
     private suspend fun finishCoreStart(config: AetherConfig, attemptId: Long): Boolean {
         if (torChaining) return true
         val holdForLayer2Tun = config.connectionMode == ConnectionMode.TUNNEL && config.exitNodeMode != ExitNodeMode.DIRECT
-        publishCoreActive(config.socksPort.toIntOrNull() ?: 2021, attemptId, holdForLayer2Tun)
+        val port = if (config.exitNodeMode.needsVpnExit && config.connectionMode != ConnectionMode.TUNNEL) {
+            notifyStatusChanged(appContext, ConnectionStatus.VALIDATING)
+            proxyModeExit.start(config, refresh = true).also { awaitingVpnExit = false }
+        } else config.socksPort.toIntOrNull() ?: 2021
+        publishCoreActive(port, attemptId, holdForLayer2Tun)
         return true
     }
 
@@ -1232,6 +1240,8 @@ class ConnectionController private constructor(context: Context) : ConnectionCon
     }
 
     override suspend fun stop() {
+        proxyModeExit.stop()
+        awaitingVpnExit = false
         stopTimer()
         runCatching { runner.stop() }
         mutex.withLock {
@@ -1307,6 +1317,8 @@ class ConnectionController private constructor(context: Context) : ConnectionCon
 
     @Suppress("UNUSED_EXPRESSION")
     private suspend fun cleanup(attemptId: Long) {
+        proxyModeExit.stop()
+        awaitingVpnExit = false
         if (activeAttemptId.get() == attemptId) {
             activeAttemptId.set(0)
         }
@@ -1326,6 +1338,8 @@ class ConnectionController private constructor(context: Context) : ConnectionCon
             if (current == ConnectionStatus.STOPPING && coreStatus != ConnectionStatus.STOPPED) {
                 return@update current
             }
+
+            if (awaitingVpnExit && coreStatus == ConnectionStatus.RUNNING) return@update current
 
             val next = when (coreStatus) {
                 ConnectionStatus.ERROR -> {

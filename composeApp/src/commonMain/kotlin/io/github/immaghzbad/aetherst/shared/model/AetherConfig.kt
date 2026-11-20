@@ -83,7 +83,9 @@ enum class ExitNodeMode(val rawValue: String, val displayName: String) {
     PSIPHON_POOL("psiphon_pool", "Psiphon Multi-Core"),
     CUSTOM_WG("custom_wg", "Custom WireGuard Exit"),
     CUSTOM_SOCKS5("custom_socks5", "Custom SOCKS5"),
-    FIREFOX_VPN("firefox_vpn", "Firefox VPN (Mozilla / Fastly)")
+    FIREFOX_VPN("firefox_vpn", "Firefox VPN (Mozilla / Fastly)");
+
+    val needsVpnExit: Boolean get() = this == CUSTOM_WG || this == FIREFOX_VPN
 }
 
 @Serializable
@@ -101,7 +103,8 @@ data class CustomWireGuardConfig(
     val allowedIpsV4: String = "0.0.0.0/0",
     val allowedIpsV6: String = "::/0",
     val persistentKeepalive: Int = 25,
-    val lastPingMs: Long = -1L
+    val lastPingMs: Long = -1L,
+    val preSharedKey: String = ""
 ) {
     fun isValid(): Boolean = privateKey.isNotBlank() && publicKey.isNotBlank() && endpoint.isNotBlank()
     val displayName: String get() = name.ifBlank { endpoint.ifBlank { "Proton WireGuard" } }
