@@ -79,10 +79,12 @@ jobs:
         with:
           go-version: '1.24.x'
           cache: false
-      - name: Prepare isolated transport peers and instrumented APK
+      - name: Prepare isolated transport peers
+        run: bash tools/android-runtime/check-step.sh Fixture bash tools/android-runtime/prepare.sh
+      - name: Build instrumented APK
         run: |
-          bash tools/android-runtime/prepare.sh
-          bash gradlew -PandroidRuntimeCheck=true :app:assembleDebug :app:assembleDebugAndroidTest --no-daemon
+          yes | "${ANDROID_HOME}/cmdline-tools/latest/bin/sdkmanager" --licenses >/dev/null || true
+          bash tools/android-runtime/check-step.sh Instrumentation bash gradlew -PandroidRuntimeCheck=true :app:assembleDebug :app:assembleDebugAndroidTest --no-daemon
       - name: Enable KVM
         run: sudo chmod a+rw /dev/kvm
       - name: Exercise device-wide traffic from a separate Android UID
@@ -162,7 +164,7 @@ jobs:
       - name: Build Android Release APK
         env:
           ORG_GRADLE_PROJECT_arm64Only: ${{ inputs.arm64_only && 'true' || 'false' }}
-        run: ./gradlew :app:assembleRelease --no-daemon
+        run: bash tools/android-runtime/check-step.sh APK ./gradlew :app:assembleRelease --no-daemon
 
       - name: Check test APK ABI
         if: inputs.arm64_only
