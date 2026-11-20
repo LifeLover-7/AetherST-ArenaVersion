@@ -1,0 +1,7 @@
+# Android runtime check
+
+`release.yml` runs this job alongside an arm64-only test build. A separate x86_64 debug installation (`.runtimecheck`) exercises the Android service, the packaged Aether executable, WireGuard or Firefox exit, and HEV on a real emulator TUN. A request from **another UID** must get a per-request nonce back from the expected *inner* origin; a listening socket or a 200 from layer one is not a pass. Includes WG → custom WG, WG → Firefox CONNECT, modern and classic GOOL → Direct, and MIM → Direct. These are controlled peers, not live WARP/Proton/Mozilla accounts or a carrier test.
+
+`prepare.sh` needs Linux, Go 1.24, OpenSSL, an Android NDK and SDK. It generates per-run WireGuard keys, an H2 capsule peer, restricted CONNECT edge and test-only CA in `app/build/runtime-check`. Only `-PandroidRuntimeCheck=true` **debug** picks up test resources; neither fixtures nor trust anchors go into the release APK. Build and boot API 30 x86_64 as in the workflow, then use `RUNNER_TEMP=/tmp bash tools/android-runtime/run.sh` on a disposable emulator. Terminate the fixture after local testing. The host regression fixtures are separate (`tools/exit-test`).
+
+`build-sing-box.sh arm64-v8a app/src/main/jniLibs/arm64-v8a/libsing-box.so` rebuilds the existing pinned sing-box 1.10.7 with 16-KB ELF alignment for a local release. CI does this before packaging. No new phone-side dependency.

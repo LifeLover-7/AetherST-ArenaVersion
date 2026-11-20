@@ -22,7 +22,7 @@ import io.github.immaghzbad.aetherst.R
 import io.github.immaghzbad.aetherst.core.ConnectionController
 import io.github.immaghzbad.aetherst.core.DnsMap
 import io.github.immaghzbad.aetherst.core.HevEngineSettings
-import io.github.immaghzbad.aetherst.core.HevTun2SocksConfig
+import io.github.immaghzbad.aetherst.core.DeviceTun
 import io.github.immaghzbad.aetherst.core.HevTun2SocksEngine
 import io.github.immaghzbad.aetherst.core.HevTun2SocksNative
 import io.github.immaghzbad.aetherst.core.PsiphonController
@@ -36,7 +36,6 @@ import io.github.immaghzbad.aetherst.shared.data.ActiveProxyProvider
 import io.github.immaghzbad.aetherst.shared.data.IpInfoRepository
 import io.github.immaghzbad.aetherst.shared.data.AetherConfigRepository
 import io.github.immaghzbad.aetherst.shared.data.LogRepository
-import io.github.immaghzbad.aetherst.shared.model.AetherIpMode
 import io.github.immaghzbad.aetherst.shared.model.ChainProvider
 import io.github.immaghzbad.aetherst.shared.model.ConnectionMode
 import io.github.immaghzbad.aetherst.shared.model.ConnectionStatus
@@ -437,15 +436,14 @@ class AetherVpnService : VpnService() {
                 )
                 ensureCurrentAttempt(attemptId)
 
-                // گام ۳: ایجاد رابط TUN با MTU بهینه (1120 برای زنجیره‌سازی دو لایه وایرگارد جهت جلوگیری از MTU Blackhole)
+                // Use the device-link MTU for both VpnService and tun2socks.
                 if (vpnInterface == null) {
                     if (!establishVpnTun(attemptId, effectiveEngine)) throw IllegalStateException("TUN establishment failed")
                 }
                 ensureCurrentAttempt(attemptId)
                 val descriptor = vpnInterface ?: throw IllegalStateException("TUN descriptor unavailable")
 
-                val maxSafeMtu = if (config.exitNodeMode == ExitNodeMode.CUSTOM_WG) 1120 else 1280
-                val effectiveMtu = maxSafeMtu.coerceAtMost(config.mtu.coerceIn(576, 9000))
+                val effectiveMtu = DeviceTun(config).mtu
                 SocksGate.setReady(SocksReadiness.PROBED_OK)
 
                 if (effectiveEngine == TunnelEngine.HEV_TUN2SOCKS) {
@@ -517,40 +515,16 @@ class AetherVpnService : VpnService() {
 
     private fun establishVpnTun(attemptId: Long, engine: TunnelEngine): Boolean = runCatching {
         val config = AetherConfigRepository.getInstance(getSettings(PlatformContext(this))).config.value
-        val maxSafeMtu = if (config.exitNodeMode == ExitNodeMode.CUSTOM_WG) 1120 else 1280
-        val effectiveMtu = maxSafeMtu.coerceAtMost(config.mtu.coerceIn(576, 9000))
+        val link = DeviceTun(config)
         val pendingFlags = PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         val builder = Builder()
-            .setMtu(effectiveMtu)
             .setSession("AetherST Tunnel")
             .setConfigureIntent(PendingIntent.getActivity(this, 0, Intent(this, MainActivity::class.java), pendingFlags))
 
-        val wgConfig = if (config.exitNodeMode == ExitNodeMode.CUSTOM_WG) config.customWgConfig else null
-        val supportsIpv6 = config.effectiveIpMode() == AetherIpMode.DUAL || config.effectiveIpMode() == AetherIpMode.IPV6 || config.ipv6Leak
-        val filteredWg = wgConfig?.filterForPrimarySupport(supportsIpv6)
-
-        // استک lwIP در HEV_TUN2SOCKS و SocksTunBridge روی 198.18.0.1/24 و MapDNS 198.18.0.2 کار می‌کند؛
-        // آدرس داخلی وایرگارد لایه دوم (مثل 10.2.0.2) متعلق به netstack داخلی sing-box است و نباید روی TUN اندروید ست شود.
-        builder.addAddress("198.18.0.1", 24)
-        builder.addAddress("fd00::1", 120)
-        builder.addRoute("0.0.0.0", 0)
-
-        if (engine == TunnelEngine.HEV_TUN2SOCKS) {
-            builder.addDnsServer(HevTun2SocksConfig.MAP_DNS_ADDRESS)
-        } else {
-            builder.addDnsServer("1.1.1.1")
-            builder.addDnsServer("8.8.8.8")
-            builder.addDnsServer("2606:4700:4700::1111")
-            builder.addDnsServer("2001:4860:4860::8888")
-        }
-
-        if ((filteredWg?.allowedIpsV6?.isNotEmpty() == true || config.ipv6Leak) && Build.VERSION.SDK_INT > Build.VERSION_CODES.O_MR1) {
-            runCatching { builder.addRoute("::", 0) }
-        }
+        link.configure(builder, engine)
 
         if (config.tunnelAllApps) {
-            try { builder.addDisallowedApplication(packageName) } catch (_: Exception) {}
-            try { builder.addDisallowedApplication(applicationContext.packageName) } catch (_: Exception) {}
+            builder.addDisallowedApplication(packageName) // Never capture our own Aether/exit sockets.
 
             val bypassPackages = config.excludedPackages
 
@@ -585,6 +559,7 @@ class AetherVpnService : VpnService() {
                             LogRepository.w("[Tun] Skipping package $pkg: ${e.message}")
                         }
                     }
+                check(added > 0) { "None of the selected VPN apps are installed" }
                 LogRepository.i("[Tun] Per-app mode: $added apps routed through VPN, rest bypassed")
             } else {
                 try { builder.addDisallowedApplication(packageName) } catch (_: Exception) {}
@@ -617,7 +592,7 @@ class AetherVpnService : VpnService() {
             LogRepository.e("[Tun] [attempt=$attemptId] Failed: builder.establish() returned null prepare=${prep != null}")
             return@runCatching false
         }
-        LogRepository.i("[Tun] [attempt=$attemptId] Established mtu=$effectiveMtu engine=$engine")
+        LogRepository.i("[Tun] [attempt=$attemptId] Established mtu=${link.mtu} engine=$engine")
         true
     }.getOrElse {
         LogRepository.e("[Tun] [attempt=$attemptId] Failed: ${it.localizedMessage}")
@@ -746,8 +721,7 @@ class AetherVpnService : VpnService() {
                 val target = "$targetHost:$targetPort"
                 SocksGate.setReady(SocksReadiness.PROBED_OK)
 
-                val maxSafeMtu = if (cfg.exitNodeMode == ExitNodeMode.CUSTOM_WG) 1120 else 1280
-                val effectiveMtu = maxSafeMtu.coerceAtMost(cfg.mtu.coerceIn(576, 9000))
+                val effectiveMtu = DeviceTun(cfg).mtu
 
                 when (activeTunnelEngine) {
                     TunnelEngine.HEV_TUN2SOCKS -> {
@@ -857,8 +831,7 @@ class AetherVpnService : VpnService() {
         val hevSettings = switchHevSettings ?: return
         delay(300.milliseconds)
         val newEngine = HevTun2SocksEngine()
-        val maxSafeMtu = if (cfg.exitNodeMode == ExitNodeMode.CUSTOM_WG) 1120 else 1280
-        val effectiveMtu = maxSafeMtu.coerceAtMost(cfg.mtu.coerceIn(576, 9000))
+        val effectiveMtu = DeviceTun(cfg).mtu
         val ok = newEngine.start(descriptor, host, port, effectiveMtu, activeAttemptId.get(), hevSettings, hevUdpMode(cfg))
         stateMutex.withLock {
             if (ok) {
@@ -888,9 +861,8 @@ class AetherVpnService : VpnService() {
 
         when (config.exitNodeMode) {
             ExitNodeMode.DIRECT -> {
-                val host = config.socksHost.ifBlank { "127.0.0.1" }
-                val port = config.socksPort.toIntOrNull() ?: 2021
-                return host to port
+                // The native process binds loopback or wildcard, never the UI's advertised host.
+                return "127.0.0.1" to (config.socksPort.toIntOrNull() ?: 2021)
             }
             ExitNodeMode.PSIPHON_POOL -> {
                 val poolPort = psiphonUrl?.substringAfterLast(":")?.toIntOrNull()

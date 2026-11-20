@@ -8,8 +8,6 @@ import io.github.immaghzbad.aetherst.shared.data.AetherConfigRepository
 import io.github.immaghzbad.aetherst.shared.data.LogRepository
 import io.github.immaghzbad.aetherst.shared.data.PsiphonEgressRegistry
 import io.github.immaghzbad.aetherst.shared.model.AetherConfig
-import io.github.immaghzbad.aetherst.shared.model.ChainProvider
-import io.github.immaghzbad.aetherst.shared.model.ExitNodeMode
 import java.io.File
 import java.lang.ref.WeakReference
 import java.net.ServerSocket
@@ -27,11 +25,7 @@ object PsiphonController {
         vpnServiceRef = WeakReference(service)
     }
 
-    fun isSupported(config: AetherConfig): Boolean {
-        return config.psiphonEnabled ||
-                config.exitNodeMode == ExitNodeMode.PSIPHON_POOL ||
-                config.chainProvider == ChainProvider.PSIPHON
-    }
+    fun isSupported(config: AetherConfig): Boolean = config.isPsiphonActive()
 
     fun getPort(): Int = psiphonPort
 

@@ -774,6 +774,10 @@ class AetherConfigRepository private constructor(private val settings: Settings)
         settings.putString("${p}wiw_outer", cfg.wiwOuter)
         settings.putString("${p}wiw_inner", cfg.wiwInner)
         settings.putBoolean("${p}wiw_scan", cfg.wiwScan)
+        settings.putBoolean("${p}mim_enabled", cfg.mimEnabled)
+        settings.putString("${p}mim_outer", cfg.mimOuter)
+        settings.putString("${p}mim_inner", cfg.mimInner)
+        settings.putBoolean("${p}mim_scan", cfg.mimScan)
         settings.putBoolean("${p}gool_classic", cfg.goolClassic)
         settings.putBoolean("${p}gool_neighbor_egress", cfg.goolNeighborEgress)
         settings.putString("${p}masque_sni", cfg.masqueSni)
@@ -980,10 +984,14 @@ class AetherConfigRepository private constructor(private val settings: Settings)
     private fun loadProtocolSettings(protocol: AetherProtocol, base: AetherConfig): AetherConfig {
         val p = "protocol_${protocol.name}_"
         if (!settings.getBoolean("${p}initialized", false)) {
-            return protocolDefaults(base, protocol)
+            return protocolDefaults(base.copy(mimEnabled = false, mimOuter = "", mimInner = "", mimScan = true), protocol)
         }
         return base.copy(
             protocol = protocol,
+            mimEnabled = settings.getBoolean("${p}mim_enabled", protocol == AetherProtocol.MIM),
+            mimOuter = settings.getString("${p}mim_outer", ""),
+            mimInner = settings.getString("${p}mim_inner", ""),
+            mimScan = settings.getBoolean("${p}mim_scan", true),
             noise = runCatching { AetherNoise.valueOf(settings.getString("${p}noise", "")) }.getOrDefault(base.noise),
             scanMode = runCatching { AetherScanMode.valueOf(settings.getString("${p}scan_mode", "")) }.getOrDefault(base.scanMode),
             ipMode = runCatching { AetherIpMode.valueOf(settings.getString("${p}ip_mode", "")) }.getOrDefault(base.ipMode),

@@ -103,10 +103,11 @@ class ExitTunnelTest {
                 Http2Connection.Builder(false, TaskRunner.INSTANCE).socket(ssl).listener(object : Http2Connection.Listener() {
                     override fun onStream(stream: Http2Stream) {
                         val h = stream.takeHeaders()
-                        check(h[":method"] == "CONNECT" && h[":path"] == null && h["proxy-authorization"] == "Bearer fixture")
+                        check(h[":method"] == "CONNECT" && h[":path"] == null)
+                        val code = if (h["proxy-authorization"] == "Bearer fixture") status else 407
                         opened += h[":authority"].orEmpty()
-                        stream.writeHeaders(listOf(Header(":status", "$status")), status != 200, true)
-                        if (status == 200) stream.getSink().buffer().use { it.writeAll(stream.getSource()) }
+                        stream.writeHeaders(listOf(Header(":status", "$code")), code != 200, true)
+                        if (code == 200) stream.getSink().buffer().use { it.writeAll(stream.getSource()) }
                     }
                 }).build().start()
             } else ssl.use {
@@ -153,6 +154,19 @@ class ExitTunnelTest {
             } finally { tunnel.stop() }
             assertFalse(portListening("127.0.0.1", port), "SOCKS port $port still open")
             assertFalse(portListening("127.0.0.1", port - 1), "HTTP port ${port-1} still open")
+        }
+    }
+    @Test(timeout = 15000) fun revokedPassRefreshesOnceThroughTheAccountProvider() {
+        Edge("h2", 200).use { edge ->
+            val calls = mutableListOf<Boolean>()
+            val tunnel = FirefoxVpnExitTunnel(edge.primary, freePortPair(), { fresh ->
+                calls += fresh; if (fresh) "fixture" else "revoked"
+            }, { listOf(FirefoxVpnExitTunnel.EdgeEndpoint("edge.test", 443, "US")) }, ::roundTrip, edge.trust.sslSocketFactory())
+            try {
+                assertTrue(tunnel.start(), tunnel.lastErrorMessage)
+                assertEquals(listOf(false, true), calls)
+                assertEquals(2, edge.opened.size)
+            } finally { tunnel.stop() }
         }
     }
     @Test(timeout = 25000) fun firefoxH2RoundTripWhileStartIsWaiting() = exercise("h2", 200)

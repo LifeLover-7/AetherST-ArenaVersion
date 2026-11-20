@@ -5,6 +5,9 @@ plugins {
   id("org.jetbrains.kotlin.plugin.serialization") version "2.1.0"
 }
 
+val runtimeCheck = providers.gradleProperty("androidRuntimeCheck").orNull == "true"
+val targetAbi = if (runtimeCheck) "x86_64" else "arm64-v8a"
+
 android {
   namespace = "io.github.immaghzbad.aetherst"
   compileSdk = 36
@@ -20,7 +23,7 @@ android {
 
     externalNativeBuild {
       ndkBuild {
-        abiFilters("arm64-v8a")
+        abiFilters(targetAbi)
       }
     }
   }
@@ -60,15 +63,21 @@ android {
       proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
       signingConfig = signingConfigs.getByName("release")
     }
-    debug { }
+    debug { if (runtimeCheck) applicationIdSuffix = ".runtimecheck" }
+  }
+
+  if (runtimeCheck) {
+    sourceSets["debug"].res.srcDir("build/runtime-check/res")
+    sourceSets["debug"].jniLibs.srcDir("build/runtime-check/jni")
+    sourceSets["androidTest"].assets.srcDir("build/runtime-check/assets")
   }
 
   splits {
     abi {
       isEnable = true
       reset()
-      include("arm64-v8a")
-      isUniversalApk = !providers.gradleProperty("arm64Only").getOrElse("false").toBoolean()
+      include(targetAbi)
+      isUniversalApk = !runtimeCheck && !providers.gradleProperty("arm64Only").getOrElse("false").toBoolean()
     }
   }
 

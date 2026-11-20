@@ -60,6 +60,39 @@ jobs:
           assert not any(t.find(k) is not None for t in cases for k in ('failure','error','skipped')), 'Expected the data-plane tests to run and pass'
           PYTEST
 
+  android-runtime:
+    name: Android VPN data path (emulator)
+    if: inputs.arm64_only
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-java@v4
+        with:
+          distribution: zulu
+          java-version: '17'
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.24.x'
+          cache: false
+      - name: Prepare isolated transport peers and instrumented APK
+        run: |
+          bash tools/android-runtime/prepare.sh
+          bash gradlew -PandroidRuntimeCheck=true :app:assembleDebug :app:assembleDebugAndroidTest --no-daemon
+      - name: Enable KVM
+        run: sudo chmod a+rw /dev/kvm
+      - name: Exercise device-wide traffic from a separate Android UID
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 30
+          arch: x86_64
+          target: default
+          script: bash tools/android-runtime/run.sh
+
   build:
     name: Build Android APK
     runs-on: ubuntu-latest
@@ -114,6 +147,13 @@ jobs:
           else
             echo "==> Permanent keystore already exists. Using existing key."
           fi
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.24.x'
+          cache: false
+      - name: Build the pinned WireGuard exit for both 4 KB and 16 KB Android page sizes
+        run: bash tools/android-runtime/build-sing-box.sh arm64-v8a app/src/main/jniLibs/arm64-v8a/libsing-box.so
 
       - name: Strip native binaries to minimize APK size
         run: |

@@ -228,9 +228,6 @@ private fun hasActiveNetworkInterface(): Boolean {
         if (!effectiveNewConfig.psiphonEnabled && oldConfig.psiphonEnabled) {
             effectiveNewConfig = effectiveNewConfig.copy(psiphonChainOuter = "", psiphonMasqueOrder = "auto", psiphonOnly = false)
         }
-        if (effectiveNewConfig.protocol != AetherProtocol.MASQUE && (effectiveNewConfig.mimEnabled || effectiveNewConfig.mimOuter.isNotEmpty() || effectiveNewConfig.mimInner.isNotEmpty())) {
-            effectiveNewConfig = effectiveNewConfig.copy(mimEnabled = false, mimOuter = "", mimInner = "")
-        }
         val isUiOnly = oldConfig.copy(connectButtonStyle = effectiveNewConfig.connectButtonStyle, appLanguage = effectiveNewConfig.appLanguage, ipInfoProvider = effectiveNewConfig.ipInfoProvider) == effectiveNewConfig
         if (!isUiOnly && !requireDisconnected()) return
         if (oldConfig.protocol == AetherProtocol.ZERO_TRUST && effectiveNewConfig.protocol != AetherProtocol.ZERO_TRUST) {

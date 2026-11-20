@@ -1,5 +1,7 @@
 package io.github.immaghzbad.aetherst.shared.net
 
+import okhttp3.Protocol
+import okhttp3.internal.platform.Platform
 import okhttp3.internal.concurrent.TaskRunner
 import okhttp3.internal.http2.ErrorCode
 import okhttp3.internal.http2.Header
@@ -40,9 +42,9 @@ internal class FirefoxConnectSession(
     val protocol: String
 
     init {
-        val tls = dialTls(listOf("h2", "http/1.1"))
+        val tls = dialTls(listOf(Protocol.HTTP_2, Protocol.HTTP_1_1))
         try {
-            protocol = runCatching { tls.applicationProtocol }.getOrNull().orEmpty().ifBlank { "http/1.1" }
+            protocol = Platform.get().getSelectedProtocol(tls) ?: "http/1.1"
             h2 = when (protocol) {
                 "h2" -> Http2Connection.Builder(true, TaskRunner.INSTANCE).socket(tls, edge.host).build().apply { start() }
                 "http/1.1" -> { spare = tls; null }
@@ -51,7 +53,7 @@ internal class FirefoxConnectSession(
         } catch (e: Exception) { discard(tls); throw e }
     }
 
-    private fun dialTls(protocols: List<String>): SSLSocket {
+    private fun dialTls(protocols: List<Protocol>): SSLSocket {
         val raw = Socket(primary)
         try {
             raw.connect(InetSocketAddress.createUnresolved(edge.host, edge.port), 8_000)
@@ -59,9 +61,9 @@ internal class FirefoxConnectSession(
             ssl.sslParameters = ssl.sslParameters.apply {
                 endpointIdentificationAlgorithm = "HTTPS"
                 serverNames = listOf(SNIHostName(edge.host))
-                // Android 8/9 do not expose the JDK ALPN API. Negotiate HTTP/1.1 on those devices.
-                runCatching { applicationProtocols = protocols.toTypedArray() }
             }
+            // Uses Conscrypt's ALPN extension on Android 8/9 and the platform API on 10+.
+            Platform.get().configureTlsExtensions(ssl, edge.host, protocols)
             ssl.soTimeout = 8_000
             ssl.startHandshake()
             ssl.soTimeout = 0
@@ -95,7 +97,7 @@ internal class FirefoxConnectSession(
                 }
             } catch (e: Exception) { stream.closeLater(ErrorCode.CANCEL); throw e }
         }
-        val tls = synchronized(lock) { check(!closed); spare.also { spare = null } } ?: dialTls(listOf("http/1.1"))
+        val tls = synchronized(lock) { check(!closed); spare.also { spare = null } } ?: dialTls(listOf(Protocol.HTTP_1_1))
         try {
             tls.soTimeout = 10_000
             val output = tls.outputStream

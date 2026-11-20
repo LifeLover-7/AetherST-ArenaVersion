@@ -112,7 +112,18 @@ class FirefoxVpnExitTunnel internal constructor(
                 }
                 synchronized(sessionLock) { session = candidate; currentEdge = edge; rejected = null }
                 // Probe through the actual local SOCKS handler. Never hold sessionLock while waiting for it.
-                val ip = probe(localListenPort)
+                var ip = probe(localListenPort)
+                val denial = rejected
+                if (ip == null && denial != null && denial.status in setOf(401, 407)) {
+                    // A cached pass can be revoked before its exp. Ask the account provider once;
+                    // never retry a quota/entitlement refusal or send the same refused pass again.
+                    val fresh = getPass(true)
+                    if (!fresh.isNullOrBlank() && fresh != currentProxyPass) {
+                        currentProxyPass = fresh
+                        rejected = null
+                        ip = probe(localListenPort)
+                    }
+                }
                 if (ip != null && candidate.isAlive()) {
                     verifiedExitIp = ip
                     startProxyPassRenewalLoop()
@@ -591,14 +602,15 @@ class FirefoxVpnExitTunnel internal constructor(
                                 if (protocols != null) {
                                     for (pElem in protocols) {
                                         val pObj = pElem.jsonObject
-                                        if (pObj["name"]?.jsonPrimitive?.content?.lowercase() == "connect") {
+                                        if (pObj["name"]?.jsonPrimitive?.content?.lowercase() == "connect" &&
+                                            (pObj["scheme"]?.jsonPrimitive?.content ?: "https") == "https") {
                                             connectHost = pObj["host"]?.jsonPrimitive?.content?.trim()
                                             connectPort = pObj["port"]?.jsonPrimitive?.intOrNull ?: 443
                                             if (!connectHost.isNullOrBlank()) break
                                         }
                                     }
                                 }
-                                if (connectHost.isNullOrBlank()) {
+                                if (connectHost.isNullOrBlank() && protocols.isNullOrEmpty()) {
                                     val fallbackH = (srv["host"]?.jsonPrimitive?.content ?: srv["hostname"]?.jsonPrimitive?.content)?.trim()
                                     if (!fallbackH.isNullOrBlank() && fallbackH.contains(".")) {
                                         connectHost = fallbackH
@@ -677,7 +689,7 @@ class FirefoxVpnExitTunnel internal constructor(
                                     for (pElem in protocols) {
                                         val pObj = pElem.jsonObject
                                         val pName = pObj["name"]?.jsonPrimitive?.content?.lowercase()
-                                        if (pName == "connect") {
+                                        if (pName == "connect" && (pObj["scheme"]?.jsonPrimitive?.content ?: "https") == "https") {
                                             val h = pObj["host"]?.jsonPrimitive?.content?.trim()
                                             val pt = pObj["port"]?.jsonPrimitive?.intOrNull ?: 443
                                             if (!h.isNullOrBlank()) {
@@ -687,7 +699,7 @@ class FirefoxVpnExitTunnel internal constructor(
                                         }
                                     }
                                 }
-                                if (!added) {
+                                if (!added && protocols.isNullOrEmpty()) {
                                     val h = (srv["host"]?.jsonPrimitive?.content ?: srv["hostname"]?.jsonPrimitive?.content)?.trim()
                                     val pt = srv["port"]?.jsonPrimitive?.intOrNull ?: 443
                                     if (!h.isNullOrBlank() && h.contains(".")) {

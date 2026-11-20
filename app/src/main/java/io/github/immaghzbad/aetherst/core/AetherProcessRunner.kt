@@ -49,22 +49,19 @@ class AetherProcessRunner(private val context: Context) {
     private var runnerJob: Job? = null
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val currentAttemptId = AtomicLong(0)
-    private var goolOuterValidated = false
-    private var dataPlaneOk = false
     private var lastBindAddress: String = "127.0.0.1:2021"
-    private val isReconnecting = AtomicBoolean(false)
 
     private val _connectionStatus = MutableStateFlow(ConnectionStatus.STOPPED)
     val connectionStatus: StateFlow<ConnectionStatus> = _connectionStatus.asStateFlow()
 
     private val quickRetryPending = AtomicBoolean(false)
 
-    fun start(config: AetherConfig, bindAddress: String, onCodeRequired: () -> Unit = {}, inputProvider: suspend () -> String = { "" }) {
+    fun start(config: AetherConfig, bindAddress: String, onCodeRequired: () -> Unit = {}, inputProvider: suspend () -> String = { kotlinx.coroutines.awaitCancellation() }) {
         synchronized(lock) {
             if (runnerJob?.isActive == true) return
 
             val attemptId = currentAttemptId.incrementAndGet()
-            goolOuterValidated = false
+            SocksGate.setReady(SocksReadiness.NOT_READY)
             lastBindAddress = bindAddress
             updateState(ConnectionStatus.STARTING, attemptId)
             runnerJob = scope.launch {
@@ -83,6 +80,7 @@ class AetherProcessRunner(private val context: Context) {
                     }
 
                     if (retryCount > 0) {
+                        SocksGate.setReady(SocksReadiness.NOT_READY)
                         val waitTime = if (quickRetryPending.compareAndSet(true, false)) {
                             3000L
                         } else {
@@ -118,7 +116,6 @@ class AetherProcessRunner(private val context: Context) {
     private suspend fun runBinary(config: AetherConfig, attemptId: Long, bindAddress: String, onCodeRequired: () -> Unit, inputProvider: suspend () -> String): Boolean = coroutineScope {
         var proc: Process? = null
         try {
-            dataPlaneOk = false
             val binaryFile = BinaryManager.prepareBinary(context)
             if (currentAttemptId.get() != attemptId) return@coroutineScope true
 
@@ -134,13 +131,7 @@ class AetherProcessRunner(private val context: Context) {
             commandList.add("--bind")
             commandList.add(bindAddress)
 
-            when (config.protocol) {
-                AetherProtocol.MASQUE -> commandList.add("--masque")
-                AetherProtocol.WG -> commandList.add("--wg")
-                AetherProtocol.GOOL -> {} // Added below based on config.goolClassic
-                AetherProtocol.MIM -> commandList.add("--mim")
-                AetherProtocol.ZERO_TRUST -> {}
-            }
+            commandList.addAll(config.primaryArguments())
 
             commandList.add("--scan")
             commandList.add(config.scanMode.rawValue)
@@ -166,48 +157,6 @@ class AetherProcessRunner(private val context: Context) {
                 }
             )
 
-            val isMasqueBased = config.protocol == AetherProtocol.MASQUE || config.protocol == AetherProtocol.MIM || config.protocol == AetherProtocol.ZERO_TRUST || (config.protocol == AetherProtocol.GOOL && !config.goolClassic) || config.mimEnabled
-           if (isMasqueBased) {
-                when (config.effectiveHttpVersion()) {
-                    MasqueHttpVersion.H2 -> {
-                        commandList.add("--h2")
-                    }
-                    MasqueHttpVersion.H1 -> {
-                        commandList.add("--no-h2")
-                        commandList.add("--no-quic-v2")
-                    }
-                    MasqueHttpVersion.H3 -> {
-                        // H3 uses native QUIC without --h2 flag
-                    }
-                    MasqueHttpVersion.AUTO -> {
-                        if (config.h2Mode) commandList.add("--h2")
-                    }
-                }
-                if (config.echEnabled) {
-                    commandList.add("--ech")
-                    commandList.add("auto")
-                }
-                if (config.h2Fragment) {
-                    commandList.add("--fragment")
-                    commandList.add("--fragment-size")
-                    commandList.add(config.fragmentSize.ifBlank { "30-60" })
-                    commandList.add("--fragment-delay")
-                    commandList.add(config.fragmentDelay.ifBlank { "5-15" })
-                }
-                val effectiveSni = if (config.masqueSni.isNotBlank()) {
-                    config.masqueSni.trim()
-                } else if (config.protocol != AetherProtocol.ZERO_TRUST) {
-                    "consumer-masque.cloudflareclient.com"
-                } else {
-                    ""
-                }
-                if (effectiveSni.isNotBlank()) {
-                    commandList.add("--masque-sni")
-                    commandList.add(effectiveSni)
-                }
-            }
-
-
             if (config.httpProxyEnabled) {
                 val httpBindHost = bindAddress.substringBefore(':')
                 commandList.add("--http-proxy")
@@ -216,54 +165,6 @@ class AetherProcessRunner(private val context: Context) {
 
             if (config.noDataCheck) commandList.add("--no-data-check")
             if (config.quickReconnect) commandList.add("--quick-reconnect") else commandList.add("--no-quick-reconnect")
-
-            val wiwOuter = if (config.protocol == AetherProtocol.GOOL) config.wiwOuter.trim().ifEmpty { config.peer.trim() } else ""
-            val wiwInner = if (config.protocol == AetherProtocol.GOOL) config.wiwInner.trim().ifEmpty { config.wgPeer.trim() } else ""
-
-            when (config.protocol) {
-                AetherProtocol.GOOL -> {
-                    if (config.goolClassic) {
-                        commandList.add("--gool-classic")
-                        if (wiwOuter.isNotEmpty()) {
-                            commandList.add("--wiw-outer")
-                            commandList.add(wiwOuter)
-                        }
-                        if (wiwInner.isNotEmpty()) {
-                            commandList.add("--wiw-inner")
-                            commandList.add(wiwInner)
-                        }
-                        if (config.wiwScan) {
-                            commandList.add("--wiw-scan")
-                        }
-                    } else {
-                        commandList.add("--gool")
-                        if (wiwOuter.isNotEmpty()) {
-                            commandList.add("--peer")
-                            commandList.add(wiwOuter)
-                        }
-                        if (wiwInner.isNotEmpty()) {
-                            commandList.add("--gool-peer")
-                            commandList.add(wiwInner)
-                        }
-                    }
-                }
-                AetherProtocol.WG -> {
-                    val wgPeer = config.wgPeer.trim().ifEmpty { config.peer.trim() }
-                    if (wgPeer.isNotEmpty()) {
-                        commandList.add("--peer")
-                        commandList.add(wgPeer)
-                        commandList.add("--wg-peer")
-                        commandList.add(wgPeer)
-                    }
-                }
-                else -> {
-                    val peer = config.peer.trim()
-                    if (peer.isNotEmpty()) {
-                        commandList.add("--peer")
-                        commandList.add(peer)
-                    }
-                }
-            }
 
             if ((config.protocol == AetherProtocol.WG) || (config.protocol == AetherProtocol.GOOL)) {
                 commandList.add("--keepalive")
@@ -315,10 +216,9 @@ class AetherProcessRunner(private val context: Context) {
             if (config.upstreamProxyEnabled && config.upstreamProxy.isNotEmpty()) {
                 commandList.add("--upstream")
                 commandList.add(config.upstreamProxy)
-                if (config.upstreamProxy.startsWith("http://", ignoreCase = true) && isMasqueBased) commandList.add("--h2")
             }
 
-            if (config.torEnabled) {
+            if (config.isTorActive()) {
                 when (config.torMode) {
                     TorMode.TOR -> commandList.add("--tor")
                     TorMode.TOR_REVERSE -> commandList.add("--tor-reverse")
@@ -348,23 +248,6 @@ class AetherProcessRunner(private val context: Context) {
                 }
             }
 
-            val mimActive = config.protocol == AetherProtocol.MIM || config.mimEnabled
-            val hasMimManual = config.mimOuter.isNotBlank() || config.mimInner.isNotBlank()
-            if (mimActive) {
-                if (config.protocol != AetherProtocol.MIM) {
-                    commandList.add("--mim")
-                }
-                if (config.mimOuter.isNotBlank()) {
-                    commandList.add("--mim-outer")
-                    commandList.add(config.mimOuter.trim())
-                }
-                if (config.mimInner.isNotBlank()) {
-                    commandList.add("--mim-inner")
-                    commandList.add(config.mimInner.trim())
-                }
-                if (config.mimScan && !hasMimManual) commandList.add("--mim-scan")
-            }
-
             if (!config.quicV2Probe) commandList.add("--no-quic-v2")
             if (config.firewallMark.isNotBlank()) {
                 commandList.add("--mark")
@@ -373,54 +256,16 @@ class AetherProcessRunner(private val context: Context) {
 
             val logLevelArg = if (config.coreLogLevel == AetherLogLevel.DEBUG) "debug" else "info"
 
-            val preEnv = mutableMapOf<String, String>()
-            prepareCustomWireGuardNativeChain(config, context.filesDir, binaryFile.absolutePath, commandList, preEnv)
+            cleanLegacyWireGuardIdentities(config, context.filesDir)
             val pb = ProcessBuilder(commandList)
             pb.directory(context.filesDir)
 
             val env = pb.environment()
-            env.putAll(preEnv)
-            env["AETHER_PROTOCOL"] = config.protocol.rawValue
             env["AETHER_NOIZE"] = effectiveNoise
             env["AETHER_SCAN"] = config.scanMode.rawValue
             env["AETHER_IP"] = effectiveIp.rawValue
             env["AETHER_SOCKS"] = bindAddress
             routingFile?.let { env["AETHER_ROUTES_FILE"] = it.absolutePath }
-
-            if (isMasqueBased) {
-            when (config.effectiveHttpVersion()) {
-                MasqueHttpVersion.H2 -> {
-                    env["AETHER_MASQUE_HTTP2"] = "1"
-                }
-                MasqueHttpVersion.H1 -> {
-                    env["AETHER_MASQUE_HTTP2"] = "0"
-                    env["AETHER_QUIC_V2"] = "0"
-                }
-                MasqueHttpVersion.H3 -> {
-                    env["AETHER_MASQUE_HTTP2"] = "0"
-                    env["AETHER_QUIC_V2"] = "1"
-                }
-                MasqueHttpVersion.AUTO -> {
-                    if (config.h2Mode) env["AETHER_MASQUE_HTTP2"] = "1"
-                }
-            }
-            if (config.echEnabled) env["AETHER_ECH"] = "auto"
-            if (config.h2Fragment) {
-                env["AETHER_MASQUE_H2_FRAGMENT"] = "1"
-                env["AETHER_MASQUE_H2_FRAGMENT_SIZE"] = config.fragmentSize.ifBlank { "30-60" }
-                env["AETHER_MASQUE_H2_FRAGMENT_DELAY"] = config.fragmentDelay.ifBlank { "5-15" }
-            }
-            val effectiveSni = if (config.masqueSni.isNotBlank()) {
-                config.masqueSni.trim()
-            } else if (config.protocol != AetherProtocol.ZERO_TRUST) {
-                "consumer-masque.cloudflareclient.com"
-            } else {
-                ""
-            }
-            if (effectiveSni.isNotBlank()) {
-                env["AETHER_MASQUE_SNI"] = effectiveSni
-            }
-        }
 
             if (config.httpProxyEnabled) {
                 val httpBindHost = bindAddress.substringBefore(':')
@@ -434,30 +279,6 @@ class AetherProcessRunner(private val context: Context) {
 
             env["AETHER_QUICK_RECONNECT"] = if (config.quickReconnect) "1" else "0"
 
-
-            when (config.protocol) {
-                AetherProtocol.GOOL -> {
-                    if (config.goolClassic) {
-                        env["AETHER_GOOL_MODE"] = "classic"
-                        if (wiwOuter.isNotEmpty()) env["AETHER_WIW_OUTER_PEER"] = wiwOuter
-                        if (wiwInner.isNotEmpty()) env["AETHER_WIW_INNER_PEER"] = wiwInner
-                        if (config.wiwScan) env["AETHER_WIW_PEERS"] = "auto"
-                    } else {
-                        if (wiwOuter.isNotEmpty()) env["AETHER_PEER"] = wiwOuter
-                        if (wiwInner.isNotEmpty()) env["AETHER_GOOL_PEER"] = wiwInner
-                    }
-                }
-                AetherProtocol.WG -> {
-                    val wgPeer = config.wgPeer.trim().ifEmpty { config.peer.trim() }
-                    if (wgPeer.isNotEmpty()) {
-                        env["AETHER_WG_PEER"] = wgPeer
-                        env["AETHER_PEER"] = wgPeer
-                    }
-                }
-                else -> {
-                    if (config.peer.isNotEmpty()) env["AETHER_PEER"] = config.peer
-                }
-            }
 
             env["AETHER_WG_KEEPALIVE"] = if (config.keepaliveEnabled) config.keepalive.toString() else "0"
             env["AETHER_WG_ENDPOINT_COOLDOWN_SECS"] = config.wgEndpointCooldownSecs.toString()
@@ -489,7 +310,7 @@ class AetherProcessRunner(private val context: Context) {
 
             if (config.dnsEnabled && config.dnsList.isNotEmpty()) env["AETHER_DNS"] = config.dnsList
             if (config.upstreamProxyEnabled && config.upstreamProxy.isNotEmpty()) env["AETHER_UPSTREAM"] = config.upstreamProxy
-            if (config.torEnabled) {
+            if (config.isTorActive()) {
                 env["AETHER_TOR"] = when (config.torMode) {
                     TorMode.TOR -> "chain"
                     TorMode.TOR_REVERSE -> "reverse"
@@ -511,12 +332,6 @@ class AetherProcessRunner(private val context: Context) {
                 env["AETHER_TOR_PT_DIR"] = config.torPtDir.trim().ifEmpty { torDir.absolutePath }
                 if (config.torCountry.isNotBlank()) env["AETHER_TOR_COUNTRY"] = config.torCountry.trim().lowercase()
             }
-            if (mimActive) {
-                env["AETHER_PROTOCOL"] = "mim"
-                if (config.mimOuter.isNotBlank()) env["AETHER_MIM_OUTER_PEER"] = config.mimOuter.trim()
-                if (config.mimInner.isNotBlank()) env["AETHER_MIM_INNER_PEER"] = config.mimInner.trim()
-                if (config.mimScan && !hasMimManual) env["AETHER_MIM_PEERS"] = "auto"
-            }
             if (!config.quicV2Probe) env["AETHER_QUIC_V2"] = "0"
             if (config.firewallMark.isNotBlank()) env["AETHER_MARK"] = config.firewallMark.trim()
             if (config.halfCloseSecs > 0) env["AETHER_HALF_CLOSE_SECS"] = config.halfCloseSecs.toString()
@@ -529,7 +344,6 @@ class AetherProcessRunner(private val context: Context) {
 
             env["AETHER_PERF_PROFILE"] = config.perfProfile.rawValue
             env["AETHER_LOG_LEVEL"] = logLevelArg
-            env.putAll(preEnv)
 
             pb.redirectErrorStream(true)
             proc = withContext(Dispatchers.IO) { pb.start() }
@@ -565,7 +379,7 @@ class AetherProcessRunner(private val context: Context) {
                         if (currentAttemptId.get() != attemptId) null else throw e
                     } ?: break
 
-                    parseOutputLine(line, attemptId, config.protocol, config.exitNodeMode, onCodeRequired)
+                    parseOutputLine(line, attemptId, config.primaryProtocol, config.exitNodeMode, onCodeRequired)
                 }
             }
 
@@ -605,11 +419,7 @@ class AetherProcessRunner(private val context: Context) {
         val lower = line.lowercase()
 
         val isBroken = lower.contains("broken pipe") || lower.contains("stream closed")
-        if (isBroken) {
-            if (!PsiphonController.isConnected() && !TorController.isConnected()) {
-                delay(3000.milliseconds)
-            }
-        } else {
+        if (!isBroken) {
             val source = if (lower.contains("tor")) "Tor" else "AetherCore"
             when {
                 lower.contains(" error ") || lower.contains("[error]") || lower.startsWith("error:") -> LogRepository.e(line, source)
@@ -664,134 +474,28 @@ class AetherProcessRunner(private val context: Context) {
             }
         }
 
-        val isCriticalError = (lower.contains("fatal") || lower.contains("panic")) &&
-                !lower.contains("socksbridge") &&
-                !lower.contains("connection failed")
-
-        val isLost = (_connectionStatus.value == ConnectionStatus.RUNNING && (
-            lower.contains("tunnel lost") ||
-            lower.contains("tunnel ended") ||
-            lower.contains("tunnel exited") ||
-            lower.contains("wireguard tunnel exited") ||
-            lower.contains("masque tunnel ended")
-        )) || lower.contains("all gateways failed")
-
-        when {
-            lower.contains("scanning") || lower.contains("hunting for") -> {
-                goolOuterValidated = false
-                dataPlaneOk = false
-                quickRetryPending.set(false)
+        when (primarySignal(line, lastBindAddress)) {
+            PrimarySignal.FATAL -> {
                 SocksGate.setReady(SocksReadiness.NOT_READY)
-                updateState(ConnectionStatus.STARTING, attemptId)
+                updateState(ConnectionStatus.ERROR, attemptId)
             }
-            lower.contains("validating") || lower.contains("establishing outer") || lower.contains("establishing inner") -> {
-                if (lower.contains("establishing inner") || (lower.contains("inner endpoint") && lower.contains("tunneled through outer"))) {
-                    goolOuterValidated = true
-                }
+            PrimarySignal.LOST -> {
+                SocksGate.setReady(SocksReadiness.NOT_READY)
+                quickRetryPending.set(PsiphonController.isConnected() || TorController.isConnected())
+                updateState(ConnectionStatus.RECONNECTING, attemptId)
+            }
+            PrimarySignal.SERVING -> {
+                val ok = primarySocksResponds(lastBindAddress.substringAfterLast(':').toInt())
+                if (currentAttemptId.get() != attemptId) return
+                if (!ok) LogRepository.e("[Primary] Core announced its SOCKS listener but did not negotiate SOCKS5")
+                quickRetryPending.set(false)
+                SocksGate.setReady(if (ok) SocksReadiness.PROBED_OK else SocksReadiness.NOT_READY)
+                updateState(if (ok) ConnectionStatus.SOCKS_READY else ConnectionStatus.ERROR, attemptId)
+            }
+            PrimarySignal.SCANNING, PrimarySignal.VALIDATING -> {
                 if (_connectionStatus.value == ConnectionStatus.STARTING) updateState(ConnectionStatus.VALIDATING, attemptId)
             }
-            lower.contains("tls established") || lower.contains("tls handshake complete") -> {
-                updateState(ConnectionStatus.VALIDATING, attemptId)
-            }
-            protocol == AetherProtocol.GOOL -> {
-                when {
-                    lower.contains("gool ready") ||
-                    lower.contains("gool exit:") ||
-                    lower.contains("warp-in-warp exit:") ||
-                    (lower.contains("inner") && lower.contains("tunnel validated")) ||
-                    (goolOuterValidated && lower.contains("wireguard tunnel validated")) ||
-                    lower.contains("wiw ready") ||
-                    lower.contains("warp-in-warp ready") ||
-                    lower.contains("serving socks5") ||
-                    (lower.contains("exit location") && lower.contains("accepted")) -> {
-                        quickRetryPending.set(false)
-                        dataPlaneOk = true
-                        SocksGate.setReady(SocksReadiness.PROBED_OK)
-                        updateState(ConnectionStatus.DATAPLANE_VALIDATED, attemptId)
-                        updateState(ConnectionStatus.SOCKS_READY, attemptId)
-                    }
-                    lower.contains("registering the gool") ||
-                    (lower.contains("inner endpoint") && lower.contains("tunneled through outer")) ||
-                    lower.contains("establishing inner warp tunnel") ||
-                    lower.contains("validating wireguard tunnel") ||
-                    lower.contains("connect-ip status: 200") ||
-                    lower.contains("connect-ip established") ||
-                    (lower.contains("tunnel validated") && !lower.contains("inner")) -> {
-                        goolOuterValidated = true
-                        updateState(ConnectionStatus.VALIDATING, attemptId)
-                    }
-                }
-            }
-            protocol == AetherProtocol.MIM -> {
-                when {
-                    lower.contains("masque-in-masque ready") ||
-                    lower.contains("inner masque tunnel established") ||
-                    lower.contains("masque-in-masque exit:") ||
-                    lower.contains("mim ready") ||
-                    lower.contains("mim exit:") ||
-                    (lower.contains("exit location") && lower.contains("accepted")) -> {
-                        quickRetryPending.set(false)
-                        dataPlaneOk = true
-                        SocksGate.setReady(SocksReadiness.PROBED_OK)
-                        updateState(ConnectionStatus.DATAPLANE_VALIDATED, attemptId)
-                        updateState(ConnectionStatus.SOCKS_READY, attemptId)
-                    }
-                    lower.contains("selected masque gateway") ||
-                    lower.contains("trying inner masque edge") ||
-                    lower.contains("establishing outer masque") -> {
-                        updateState(ConnectionStatus.VALIDATING, attemptId)
-                    }
-                }
-            }
-            lower.contains("connect-ip status: 200") || lower.contains("connect-ip established") -> {
-                quickRetryPending.set(false)
-                dataPlaneOk = true
-                updateState(ConnectionStatus.DATAPLANE_VALIDATED, attemptId)
-            }
-            (protocol != AetherProtocol.GOOL && protocol != AetherProtocol.MIM) && (
-                lower.contains("tunnel validated") ||
-                lower.contains("data-plane verification passed") ||
-                lower.contains("data plane verification passed") ||
-                lower.contains("connect-ip status: 200") ||
-                lower.contains("connect-ip established") ||
-                (lower.contains("exit location") && lower.contains("accepted"))
-            ) -> {
-                quickRetryPending.set(false)
-                dataPlaneOk = true
-                SocksGate.setReady(SocksReadiness.PROBED_OK)
-                updateState(ConnectionStatus.DATAPLANE_VALIDATED, attemptId)
-                if (lower.contains("serving socks5") || lower.contains("exposing socks5")) {
-                    updateState(ConnectionStatus.SOCKS_READY, attemptId)
-                }
-            }
-            (protocol != AetherProtocol.GOOL && protocol != AetherProtocol.MIM) && lower.contains("socks") && lower.contains("listening") -> {
-                quickRetryPending.set(false)
-                dataPlaneOk = true
-                SocksGate.setReady(SocksReadiness.PROBED_OK)
-                updateState(ConnectionStatus.DATAPLANE_VALIDATED, attemptId)
-                updateState(ConnectionStatus.SOCKS_READY, attemptId)
-            }
-            (( (lower.contains("reconnecting to") || lower.contains("connection lost, reconnecting")) && _connectionStatus.value == ConnectionStatus.RUNNING) || isLost) -> {
-                if (isReconnecting.compareAndSet(false, true)) {
-                    goolOuterValidated = false
-                    dataPlaneOk = false
-                    SocksGate.setReady(SocksReadiness.NOT_READY)
-                    if ((PsiphonController.isConnected() || TorController.isConnected()) && quickRetryPending.compareAndSet(false, true)) {
-                        LogRepository.i("[AetherCore] Cached gateway lost; scheduling single 3s quick retry (chain up)", "AetherCore")
-                    }
-                    updateState(ConnectionStatus.RECONNECTING, attemptId)
-                    scope.launch {
-                        delay(100.milliseconds)
-                        isReconnecting.set(false)
-                    }
-                }
-            }
-            isCriticalError -> {
-                val current = _connectionStatus.value
-                if (current != ConnectionStatus.RUNNING && current != ConnectionStatus.RECONNECTING) {
-                    updateState(ConnectionStatus.ERROR, attemptId)
-                }
-            }
+            null -> Unit
         }
     }
 
@@ -848,7 +552,7 @@ class AetherProcessRunner(private val context: Context) {
 
     fun stop() {
         currentAttemptId.incrementAndGet()
-        goolOuterValidated = false
+        SocksGate.setReady(SocksReadiness.NOT_READY)
         LastMimHops.clear()
         _connectionStatus.value = ConnectionStatus.STOPPED
 
@@ -875,12 +579,9 @@ class AetherProcessRunner(private val context: Context) {
         scope.cancel()
     }
 
-    private fun prepareCustomWireGuardNativeChain(
+    private fun cleanLegacyWireGuardIdentities(
         config: AetherConfig,
-        workDir: java.io.File,
-        binaryPath: String,
-        command: MutableList<String>,
-        env: MutableMap<String, String>
+        workDir: java.io.File
     ) {
         // Clean up any stale .corrupt or custom-wg-inner files in root workDir so Layer-1 (WG / GOOL / MASQUE)
         // always uses clean Cloudflare WARP identities without TOML deserialization failure (missing field 'ipv6').

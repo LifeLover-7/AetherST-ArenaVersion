@@ -23,8 +23,7 @@ enum class AetherProtocol(val rawValue: String, val displayName: String, val des
 enum class MasqueHttpVersion(val rawValue: String, val displayName: String, val description: String) {
     AUTO("auto", "Auto (Smart)", "Automatic H2/H3 negotiation"),
     H3("h3", "H3 (HTTP/3 QUIC)", "Fastest UDP/QUIC transport"),
-    H2("h2", "H2 (HTTP/2 TCP)", "Anti-DPI TCP/TLS transport (Recommended for Iran)"),
-    H1("h1", "H1 (HTTP/1.1 Legacy)", "Plain HTTP/1.1 CONNECT over TLS")
+    H2("h2", "H2 (HTTP/2 TCP)", "Anti-DPI TCP/TLS transport (Recommended for Iran)")
 }
 
 @Serializable

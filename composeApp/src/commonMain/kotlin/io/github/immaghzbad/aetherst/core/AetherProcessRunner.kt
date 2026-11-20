@@ -81,16 +81,8 @@ class AetherProcessRunner(private val context: PlatformContext) {
             val binaryPath = getBinaryManager(context).prepareBinary("aether")
             val command = mutableListOf(binaryPath, "--bind", bindAddress)
 
-            // انتخاب صریح پروتکل مطابق راهنمای رسمی باینری aether.exe
-            when (config.protocol) {
-                AetherProtocol.MASQUE -> command.add("--masque")
-                AetherProtocol.WG -> command.add("--wg")
-                AetherProtocol.GOOL -> {} // Added below based on config.goolClassic
-                AetherProtocol.MIM -> command.add("--mim")
-                AetherProtocol.ZERO_TRUST -> {}
-            }
+            command.addAll(config.primaryArguments())
 
-            // تنظیم حالت اسکن و پروفایل Obfuscation (Noise)
             command.add("--scan")
             command.add(config.scanMode.rawValue)
             command.add("--noize")
@@ -140,114 +132,8 @@ class AetherProcessRunner(private val context: PlatformContext) {
                 else -> "--dual"
             })
 
-            val isMasqueBased = config.protocol == AetherProtocol.MASQUE || config.protocol == AetherProtocol.MIM || config.protocol == AetherProtocol.ZERO_TRUST || (config.protocol == AetherProtocol.GOOL && !config.goolClassic) || config.mimEnabled
-            if (isMasqueBased) {
-                when (config.effectiveHttpVersion()) {
-                    MasqueHttpVersion.H2 -> {
-                        command.add("--h2")
-                    }
-                    MasqueHttpVersion.H1 -> {
-                        command.add("--no-h2")
-                        command.add("--no-quic-v2")
-                    }
-                    MasqueHttpVersion.H3 -> {
-                        // H3 uses native QUIC without --h2 flag
-                    }
-                    MasqueHttpVersion.AUTO -> {
-                        if (config.h2Mode) command.add("--h2")
-                    }
-                }
-                if (config.echEnabled) {
-                    command.add("--ech")
-                    command.add("auto")
-                }
-                if (config.h2Fragment) {
-                    command.add("--fragment")
-                    command.add("--fragment-size")
-                    command.add(config.fragmentSize.ifBlank { "30-60" })
-                    command.add("--fragment-delay")
-                    command.add(config.fragmentDelay.ifBlank { "5-15" })
-                }
-                val effectiveSni = if (config.masqueSni.isNotBlank()) {
-                    config.masqueSni.trim()
-                } else if (config.protocol != AetherProtocol.ZERO_TRUST) {
-                    "consumer-masque.cloudflareclient.com"
-                } else {
-                    ""
-                }
-                if (effectiveSni.isNotBlank()) {
-                    command.add("--masque-sni")
-                    command.add(effectiveSni)
-                }
-            }
-
-
-            val mimActive = config.protocol == AetherProtocol.MIM || config.mimEnabled
-            if (mimActive) {
-                if (config.protocol != AetherProtocol.MIM) {
-                    command.add("--mim")
-                }
-                if (config.mimOuter.isNotBlank()) {
-                    command.add("--mim-outer")
-                    command.add(config.mimOuter.trim())
-                }
-                if (config.mimInner.isNotBlank()) {
-                    command.add("--mim-inner")
-                    command.add(config.mimInner.trim())
-                }
-                if (config.mimScan) {
-                    command.add("--mim-scan")
-                }
-            }
-
             if (config.noDataCheck) command.add("--no-data-check")
             if (config.quickReconnect) command.add("--quick-reconnect") else command.add("--no-quick-reconnect")
-
-            val wiwOuter = if (config.protocol == AetherProtocol.GOOL) config.wiwOuter.trim().ifEmpty { config.peer.trim() } else ""
-            val wiwInner = if (config.protocol == AetherProtocol.GOOL) config.wiwInner.trim().ifEmpty { config.wgPeer.trim() } else ""
-
-            when (config.protocol) {
-                AetherProtocol.GOOL -> {
-                    if (config.goolClassic) {
-                        command.add("--gool-classic")
-                        if (wiwOuter.isNotEmpty()) {
-                            command.add("--wiw-outer")
-                            command.add(wiwOuter)
-                        }
-                        if (wiwInner.isNotEmpty()) {
-                            command.add("--wiw-inner")
-                            command.add(wiwInner)
-                        }
-                        if (config.wiwScan) {
-                            command.add("--wiw-scan")
-                        }
-                    } else {
-                        command.add("--gool")
-                        if (wiwOuter.isNotEmpty()) {
-                            command.add("--peer")
-                            command.add(wiwOuter)
-                        }
-                        if (wiwInner.isNotEmpty()) {
-                            command.add("--gool-peer")
-                            command.add(wiwInner)
-                        }
-                    }
-                }
-                AetherProtocol.WG -> {
-                    val wgPeer = config.wgPeer.trim().ifEmpty { config.peer.trim() }
-                    if (wgPeer.isNotEmpty()) {
-                        command.add("--peer")
-                        command.add(wgPeer)
-                    }
-                }
-                else -> {
-                    val peer = config.peer.trim()
-                    if (peer.isNotEmpty()) {
-                        command.add("--peer")
-                        command.add(peer)
-                    }
-                }
-            }
 
             if (config.protocol == AetherProtocol.WG || config.protocol == AetherProtocol.GOOL) {
                 command.add("--keepalive")
@@ -272,7 +158,6 @@ class AetherProcessRunner(private val context: PlatformContext) {
             command.add(logLevelArg)
 
             val env = mutableMapOf<String, String>()
-            env["AETHER_PROTOCOL"] = config.protocol.rawValue
             env["AETHER_NOIZE"] = config.noise.rawValue
             env["AETHER_SCAN"] = config.scanMode.rawValue
             env["AETHER_IP"] = config.effectiveIpMode().rawValue
@@ -282,45 +167,6 @@ class AetherProcessRunner(private val context: PlatformContext) {
             if (routingFile != null) {
                 env["AETHER_ROUTES_FILE"] = routingFile.absolutePath
             }
-            if (isMasqueBased) {
-            when (config.effectiveHttpVersion()) {
-                MasqueHttpVersion.H2 -> {
-                    env["AETHER_MASQUE_HTTP2"] = "1"
-                }
-                MasqueHttpVersion.H1 -> {
-                    env["AETHER_MASQUE_HTTP2"] = "0"
-                    env["AETHER_QUIC_V2"] = "0"
-                }
-                MasqueHttpVersion.H3 -> {
-                    env["AETHER_MASQUE_HTTP2"] = "0"
-                    env["AETHER_QUIC_V2"] = "1"
-                }
-                MasqueHttpVersion.AUTO -> {
-                    if (config.h2Mode) env["AETHER_MASQUE_HTTP2"] = "1"
-                }
-            }
-            if (config.echEnabled) env["AETHER_ECH"] = "auto"
-            if (config.h2Fragment) {
-                env["AETHER_MASQUE_H2_FRAGMENT"] = "1"
-                env["AETHER_MASQUE_H2_FRAGMENT_SIZE"] = config.fragmentSize.ifBlank { "30-60" }
-                env["AETHER_MASQUE_H2_FRAGMENT_DELAY"] = config.fragmentDelay.ifBlank { "5-15" }
-            }
-            val effectiveSni = if (config.masqueSni.isNotBlank()) {
-                config.masqueSni.trim()
-            } else if (config.protocol != AetherProtocol.ZERO_TRUST) {
-                "consumer-masque.cloudflareclient.com"
-            } else {
-                ""
-            }
-            if (effectiveSni.isNotBlank()) {
-                env["AETHER_MASQUE_SNI"] = effectiveSni
-            }
-        }
-            if (config.mimEnabled) {
-                env["AETHER_MIM"] = "1"
-                if (config.mimOuter.isNotBlank()) env["AETHER_MIM_OUTER_PEER"] = config.mimOuter.trim()
-                if (config.mimInner.isNotBlank()) env["AETHER_MIM_INNER_PEER"] = config.mimInner.trim()
-            }
             if (config.httpProxyEnabled) env["AETHER_HTTP_PROXY"] = "$httpBindHost:$actualHttpPort"
             if (config.noDataCheck) {
                 env["AETHER_MASQUE_NO_DATA_CHECK"] = "1"
@@ -328,30 +174,6 @@ class AetherProcessRunner(private val context: PlatformContext) {
             }
             env["AETHER_QUICK_RECONNECT"] = if (config.quickReconnect) "1" else "0"
 
-
-            when (config.protocol) {
-                AetherProtocol.GOOL -> {
-                    if (config.goolClassic) {
-                        env["AETHER_GOOL_MODE"] = "classic"
-                        if (wiwOuter.isNotEmpty()) env["AETHER_WIW_OUTER_PEER"] = wiwOuter
-                        if (wiwInner.isNotEmpty()) env["AETHER_WIW_INNER_PEER"] = wiwInner
-                        if (config.wiwScan) env["AETHER_WIW_PEERS"] = "auto"
-                    } else {
-                        if (wiwOuter.isNotEmpty()) env["AETHER_PEER"] = wiwOuter
-                        if (wiwInner.isNotEmpty()) env["AETHER_GOOL_PEER"] = wiwInner
-                    }
-                }
-                AetherProtocol.WG -> {
-                    val wgPeer = config.wgPeer.trim().ifEmpty { config.peer.trim() }
-                    if (wgPeer.isNotEmpty()) {
-                        env["AETHER_WG_PEER"] = wgPeer
-                        env["AETHER_PEER"] = wgPeer
-                    }
-                }
-                else -> {
-                    if (config.peer.isNotEmpty()) env["AETHER_PEER"] = config.peer
-                }
-            }
 
             env["AETHER_WG_KEEPALIVE"] = if (config.keepaliveEnabled) config.keepalive.toString() else "0"
             env["AETHER_WG_ENDPOINT_COOLDOWN_SECS"] = config.wgEndpointCooldownSecs.toString()
@@ -402,7 +224,7 @@ class AetherProcessRunner(private val context: PlatformContext) {
             }
             while (isActive && currentAttemptId.get() == attemptId) {
                 val line = proc.readLine() ?: break
-                parseOutputLine(line, attemptId, config.protocol, config.exitNodeMode, onCodeRequired)
+                parseOutputLine(line, attemptId, config.primaryProtocol, config.exitNodeMode, onCodeRequired)
             }
             inputJob.cancel()
             val exitCode = proc.waitFor()

@@ -49,6 +49,7 @@ class ConnectionController private constructor(context: Context) : ConnectionCon
     private val activeAttemptId = AtomicLong(0)
     private val loginCodeChannel = Channel<String>(Channel.CONFLATED)
 
+    @Volatile private var published = false
     private var timerJob: Job? = null
     private var durationSeconds = 0L
     private var baseTx = 0L
@@ -136,20 +137,20 @@ class ConnectionController private constructor(context: Context) : ConnectionCon
     override suspend fun start() {
         val attemptId: Long
         mutex.withLock {
-            if (_status.value == ConnectionStatus.RUNNING || _status.value == ConnectionStatus.VALIDATING) return
+            if (_status.value in setOf(ConnectionStatus.STARTING, ConnectionStatus.VALIDATING, ConnectionStatus.RUNNING)) return
+            published = false
             attemptId = System.currentTimeMillis()
             activeAttemptId.set(attemptId)
             notifyStatusChanged(appContext, ConnectionStatus.STARTING)
         }
         try {
-            clearLastconn()
                 if (!hasPhysicalInternet()) {
                 LogRepository.e("[Controller] No physical internet connection detected. Aborting fake start.")
                 notifyStatusChanged(appContext, ConnectionStatus.ERROR)
                 return
             }
             val config = AetherConfigRepository.getInstance(getSettings(PlatformContext(appContext))).config.value.effectiveZeroTrustConfig()
-            var effectiveConfig = config
+            var effectiveConfig = config.copy(protocol = config.primaryProtocol)
 
             if (effectiveConfig.protocol == AetherProtocol.GOOL) {
                 effectiveConfig = effectiveConfig.copy(
@@ -178,8 +179,8 @@ class ConnectionController private constructor(context: Context) : ConnectionCon
             }
             activeExitConfig = effectiveConfig.takeIf { it.exitNodeMode.needsVpnExit }
             awaitingVpnExit = activeExitConfig != null
-            val psiphonSupported = !awaitingVpnExit && PsiphonController.isSupported(effectiveConfig) && effectiveConfig.chainProvider == ChainProvider.PSIPHON
-            val torSupported = !awaitingVpnExit && TorController.isSupported(effectiveConfig) && effectiveConfig.chainProvider == ChainProvider.TOR
+            val psiphonSupported = effectiveConfig.isPsiphonActive()
+            val torSupported = effectiveConfig.isTorActive()
 
             if (psiphonSupported && !effectiveConfig.psiphonOnly) {
                 val coreSocks = effectiveConfig.socksPort.toIntOrNull() ?: 2021
@@ -208,6 +209,7 @@ class ConnectionController private constructor(context: Context) : ConnectionCon
             val rawRx = TrafficStats.getUidRxBytes(Process.myUid())
             baseTx = if (rawTx == TrafficStats.UNSUPPORTED.toLong() || rawTx < 0) 0L else rawTx
             baseRx = if (rawRx == TrafficStats.UNSUPPORTED.toLong() || rawRx < 0) 0L else rawRx
+            LogRepository.i("[Primary] protocol=${effectiveConfig.protocol} exit=${config.exitNodeMode} mode=${config.connectionMode} psiphon=$psiphonSupported tor=$torSupported")
             if (torSupported) {
                 torChaining = true
                 startTorChain(effectiveConfig, bindAddress, attemptId)
@@ -1023,8 +1025,11 @@ class ConnectionController private constructor(context: Context) : ConnectionCon
                 notifyStatusChanged(appContext, ConnectionStatus.STARTING)
             }
 
+            val primary = if (reroll == 1) config else config.copy(quickReconnect = false)
             var validatedOk = try {
-                startAetherValidated(config, bindAddress, attemptId)
+                startAetherValidated(primary, bindAddress, attemptId)
+            } catch (cancel: CancellationException) {
+                throw cancel
             } catch (e: Exception) {
                 if (config.protocol == AetherProtocol.GOOL && !config.goolClassic) {
                     LogRepository.w("[GOOL] MASQUE-based GOOL failed (${e.message}); falling back to Classic GOOL (WireGuard-in-WireGuard)...")
@@ -1038,7 +1043,7 @@ class ConnectionController private constructor(context: Context) : ConnectionCon
                 delay(500.milliseconds)
                 if (activeAttemptId.get() != attemptId) return false
                 notifyStatusChanged(appContext, ConnectionStatus.STARTING)
-                validatedOk = startAetherValidated(config.copy(goolClassic = true), bindAddress, attemptId)
+                validatedOk = startAetherValidated(primary.copy(goolClassic = true), bindAddress, attemptId)
             }
             if (!validatedOk) {
                 return false
@@ -1054,7 +1059,7 @@ class ConnectionController private constructor(context: Context) : ConnectionCon
                     LogRepository.i("[GOOL] Locked onto neighboring exit country: $exit")
                     break
                 }
-            } else {
+            } else if (config.exitNodeMode == ExitNodeMode.DIRECT) {
                 scope.launch {
                     val exit = lookupTunnelExitCountry(config, attemptId)
                     if (exit != null) {
@@ -1069,6 +1074,7 @@ class ConnectionController private constructor(context: Context) : ConnectionCon
     }
 
     fun promoteToRunning() {
+        published = true
         awaitingVpnExit = false
         notifyStatusChanged(appContext, ConnectionStatus.RUNNING)
         startTimer()
@@ -1077,8 +1083,10 @@ class ConnectionController private constructor(context: Context) : ConnectionCon
 
     private suspend fun finishCoreStart(config: AetherConfig, attemptId: Long): Boolean {
         if (torChaining) return true
-        val holdForLayer2Tun = config.connectionMode == ConnectionMode.TUNNEL && config.exitNodeMode != ExitNodeMode.DIRECT
+        val holdForLayer2Tun = config.connectionMode == ConnectionMode.TUNNEL
+        if (activeAttemptId.get() != attemptId) return false
         val port = if (config.exitNodeMode.needsVpnExit) {
+            LogRepository.i("[Exit] Starting ${config.exitNodeMode} over verified ${config.primaryProtocol}")
             notifyStatusChanged(appContext, ConnectionStatus.VALIDATING)
             runInterruptible(Dispatchers.IO) { vpnExit.start(config) }.also {
                 if (!holdForLayer2Tun) awaitingVpnExit = false
@@ -1095,8 +1103,9 @@ class ConnectionController private constructor(context: Context) : ConnectionCon
         if (activeAttemptId.get() != attemptId) return
         if (holdForLayer2Tun) {
             notifyStatusChanged(appContext, ConnectionStatus.VALIDATING)
-            LogRepository.i("[Controller] Layer-1 core active on port $proxyPort; holding at VALIDATING until Layer-2 exit node & TUN are established")
+            LogRepository.i("[Controller] Final SOCKS listener verified on port $proxyPort; waiting for Android TUN")
         } else {
+            published = true
             notifyStatusChanged(appContext, ConnectionStatus.RUNNING)
             startTimer()
             LogRepository.i("[Controller] Core is active and validated on port $proxyPort")
@@ -1115,132 +1124,28 @@ class ConnectionController private constructor(context: Context) : ConnectionCon
         }
     }
 
-    private fun lastconnFiles(): List<java.io.File> {
-        return try {
-            appContext.filesDir.listFiles()?.filter { it.name.startsWith("aether-") && it.name.contains("lastconn") && it.name.endsWith(".toml") } ?: emptyList()
-        } catch (_: Exception) {
-            emptyList()
-        }
-    }
-
-    private fun backupAndClearLastconn(): Map<String, ByteArray> {
-        val backup = mutableMapOf<String, ByteArray>()
-        for (f in lastconnFiles()) {
-            try {
-                backup[f.name] = f.readBytes()
-            } catch (_: Exception) {}
-            try {
-                f.delete()
-            } catch (_: Exception) {}
-        }
-        LogRepository.i("[MIM] backed up ${backup.size} lastconn files for fresh rescan")
-        return backup
-    }
-
-    private fun clearLastconn() {
-        for (f in lastconnFiles()) {
-            try {
-                f.delete()
-            } catch (_: Exception) {}
-        }
-    }
-
-    private fun restoreLastconn(backup: Map<String, ByteArray>?) {
-        if (backup == null) return
-        clearLastconn()
-        for ((name, bytes) in backup) {
-            try {
-                java.io.File(appContext.filesDir, name).writeBytes(bytes)
-            } catch (_: Exception) {}
-        }
-        LogRepository.i("[MIM] restored ${backup.size} lastconn files")
-    }
-
-    private fun persistWorkingInner(inner: String) {
-        val v = inner.trim()
-        if (v.isEmpty()) return
-        runCatching {
-            val repo = AetherConfigRepository.getInstance(getSettings(PlatformContext(appContext)))
-            val cur = repo.config.value
-            if (cur.mimInner.trim() != v) {
-                repo.updateConfig(cur.copy(mimInner = v))
-                LogRepository.i("[MIM] persisted working inner=$v")
-            }
-        }
-    }
-
     private suspend fun startAetherValidated(config: AetherConfig, bindAddress: String, attemptId: Long): Boolean {
-        val chainingTor = torChaining
-        LogRepository.i("[Controller] Starting core at $bindAddress (event-driven, awaiting core verdict)")
+        LogRepository.i("[Primary] Starting ${config.primaryProtocol} at $bindAddress; waiting for serving SOCKS5")
         runner.start(config, bindAddress, onCodeRequired = { updateIsWaitingForCode(true) }, inputProvider = { loginCodeChannel.receive() })
-        val proxyPort = config.socksPort.toIntOrNull() ?: 2021
-        var dpValidated = false
         var lastStatus = runner.connectionStatus.value
-        var lastProgressAt = System.currentTimeMillis()
-        var stallWarned = false
+        var lastProgress = android.os.SystemClock.elapsedRealtime()
         while (currentCoroutineContext().isActive) {
             if (activeAttemptId.get() != attemptId) return false
-            val coreStatus = runner.connectionStatus.value
-            if (coreStatus != lastStatus) {
-                lastStatus = coreStatus
-                lastProgressAt = System.currentTimeMillis()
-                stallWarned = false
-                LogRepository.i("[Controller] Core status -> $coreStatus")
+            val state = runner.connectionStatus.value
+            if (state == ConnectionStatus.SOCKS_READY) {
+                LogRepository.i("[Primary] SOCKS5 verified for ${config.primaryProtocol} on $bindAddress")
+                return true
             }
-            if (coreStatus == ConnectionStatus.DATAPLANE_VALIDATED || coreStatus == ConnectionStatus.SOCKS_READY) {
-                dpValidated = true
-                break
+            if (state == ConnectionStatus.ERROR || state == ConnectionStatus.STOPPED) error("Primary core $state before SOCKS5 was ready")
+            val now = android.os.SystemClock.elapsedRealtime()
+            if (state != lastStatus || isWaitingForCode.value) {
+                lastStatus = state
+                lastProgress = now
             }
-            if (coreStatus == ConnectionStatus.ERROR) throw IllegalStateException("Core reported error during startup")
-            if (coreStatus == ConnectionStatus.STOPPED) throw IllegalStateException("Core stopped unexpectedly during startup")
-            if (isWaitingForCode.value) {
-                lastProgressAt = System.currentTimeMillis()
-                delay(1000.milliseconds)
-                continue
-            }
-            val stalledMs = System.currentTimeMillis() - lastProgressAt
-            if (stalledMs > 120_000 && !stallWarned) {
-                LogRepository.w("[Controller] Core stalled without progress for ${stalledMs / 1000}s while awaiting data-plane validation (still waiting for core verdict)")
-                stallWarned = true
-            }
-            if (stalledMs > 180_000) {
-                throw IllegalStateException("Core stalled: no data-plane validation after 180s without status change (core did not report success or failure)")
-            }
-            delay(250.milliseconds)
+            if (now - lastProgress > 180_000) error("Primary core stalled before serving SOCKS5 ($state)")
+            delay(200.milliseconds)
         }
-        if (!dpValidated) {
-            val coreStatus = runner.connectionStatus.value
-            if (coreStatus == ConnectionStatus.ERROR) throw IllegalStateException("Core failed to start (error)")
-            if (coreStatus == ConnectionStatus.STOPPED) throw IllegalStateException("Core stopped unexpectedly")
-            throw IllegalStateException("Core data-plane validation failed (no verdict from core)")
-        }
-        if (chainingTor) {
-            if (_status.value != ConnectionStatus.VALIDATING) notifyStatusChanged(appContext, ConnectionStatus.VALIDATING)
-            LogRepository.i("[Controller] Core dataplane validated, holding at VALIDATING until Tor chain is ready")
-        } else {
-            notifyStatusChanged(appContext, ConnectionStatus.DATAPLANE_VALIDATED)
-        }
-        val socksReady = withTimeoutOrNull(60.seconds) {
-            while (currentCoroutineContext().isActive) {
-                if (activeAttemptId.get() != attemptId) return@withTimeoutOrNull false
-                val coreStatus = runner.connectionStatus.value
-                if (coreStatus == ConnectionStatus.ERROR) throw IllegalStateException("Core reported error during startup")
-                if (coreStatus == ConnectionStatus.STOPPED) throw IllegalStateException("Core stopped unexpectedly during startup")
-                if (probeSocksReady("127.0.0.1", proxyPort) || isPortListening("127.0.0.1", proxyPort)) return@withTimeoutOrNull true
-                delay(250.milliseconds)
-            }
-            false
-        } ?: false
-        if (!socksReady) throw IllegalStateException("SOCKS proxy not ready (0x00 probe failed) after 60s")
-        if (chainingTor) {
-            if (!verifyPortListening("127.0.0.1", proxyPort)) throw IllegalStateException("Proxy port $proxyPort is not listening")
-            if (_status.value != ConnectionStatus.VALIDATING) notifyStatusChanged(appContext, ConnectionStatus.VALIDATING)
-            LogRepository.i("[Controller] Core is validated on port $proxyPort, holding at VALIDATING until Tor chain is ready")
-            return true
-        }
-        notifyStatusChanged(appContext, ConnectionStatus.SOCKS_READY)
-        if (!verifyPortListening("127.0.0.1", proxyPort)) throw IllegalStateException("Proxy port $proxyPort is not listening")
-        return true
+        return false
     }
 
     override suspend fun stop() {
@@ -1413,7 +1318,7 @@ class ConnectionController private constructor(context: Context) : ConnectionCon
                     }
                 }
                 ConnectionStatus.RECONNECTING -> {
-                    if (current != ConnectionStatus.RECONNECTING) {
+                    if (published && current != ConnectionStatus.RECONNECTING) {
                         pauseTimer()
                         ConnectionStatus.RECONNECTING
                     } else {
@@ -1421,7 +1326,7 @@ class ConnectionController private constructor(context: Context) : ConnectionCon
                     }
                 }
                 ConnectionStatus.SOCKS_READY -> {
-                    if (current == ConnectionStatus.RECONNECTING) {
+                    if (published && current == ConnectionStatus.RECONNECTING) {
                         resumeTimer()
                         ConnectionStatus.RUNNING
                     } else {
@@ -1495,7 +1400,7 @@ class ConnectionController private constructor(context: Context) : ConnectionCon
                     if (!fillStream(ins, method)) return@runCatching false
                     if (method[0] != 5.toByte() || method[1] != 0.toByte()) return@runCatching false
                     val addr = InetAddress.getByName("1.1.1.1").address
-                    val req = ByteArray(5 + 4 + 2)
+                    val req = ByteArray(4 + 4 + 2)
                     req[0] = 5; req[1] = 1; req[2] = 0; req[3] = 1
                     System.arraycopy(addr, 0, req, 4, 4)
                     req[8] = (80 shr 8).toByte(); req[9] = 80.toByte()

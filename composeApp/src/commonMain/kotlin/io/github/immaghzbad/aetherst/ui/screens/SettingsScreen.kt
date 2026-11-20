@@ -719,7 +719,7 @@ private fun ProtocolPage(config: AetherConfig, onUpdateConfig: (AetherConfig) ->
                 IosPickerRow(
                     icon = Icons.Default.Http,
                     iconBg = IosActiveBlue,
-                    title = "HTTP Transport Version (H1 / H2 / H3)",
+                    title = "HTTP Transport Version (H2 / H3)",
                     value = config.httpVersion.displayName,
                     options = MasqueHttpVersion.entries.map { it.displayName },
                     onOptionSelected = { idx ->
@@ -739,8 +739,8 @@ private fun ProtocolPage(config: AetherConfig, onUpdateConfig: (AetherConfig) ->
                 AppDivider()
                 IosInputFieldRow(icon = Icons.Default.Straighten, iconBg = IosSecondaryLabel, label = strings.MASQUE_INNER_MTU, value = if (config.masqueMtu > 0) config.masqueMtu.toString() else "", onValueChange = { onUpdateConfig(config.copy(masqueMtu = it.toIntOrNull()?.coerceIn(0, 9000) ?: 0)) }, placeholder = "Auto", keyboardType = KeyboardType.Number, testTag = "masque_mtu_input")
                 AppDivider()
-                IosSwitchRow(icon = Icons.Default.SwapHoriz, iconBg = Color(0xFF30B0C7), title = strings.MIM_ENABLE, subtitle = strings.MIM_ENABLE_SUB, checked = config.mimEnabled, onCheckedChange = { onUpdateConfig(config.copy(mimEnabled = it)) }, testTag = "switch_mim_enabled")
-                if (config.mimEnabled) {
+                if (config.protocol == AetherProtocol.MASQUE) IosSwitchRow(icon = Icons.Default.SwapHoriz, iconBg = Color(0xFF30B0C7), title = strings.MIM_ENABLE, subtitle = strings.MIM_ENABLE_SUB, checked = config.mimEnabled, onCheckedChange = { onUpdateConfig(config.copy(mimEnabled = it)) }, testTag = "switch_mim_enabled")
+                if (config.protocol == AetherProtocol.MIM || config.mimEnabled) {
                     AppDivider()
                     IosInputFieldRow(icon = Icons.AutoMirrored.Filled.Send, iconBg = AppPalette.accentVariant, label = strings.MIM_OUTER, value = config.mimOuter, onValueChange = { onUpdateConfig(config.copy(mimOuter = it.trim())) }, placeholder = "e.g. 162.159.192.1:443", testTag = "mim_outer_input")
                     AppDivider()
