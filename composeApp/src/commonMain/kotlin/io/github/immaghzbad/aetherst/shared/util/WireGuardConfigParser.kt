@@ -8,7 +8,7 @@ object WireGuardConfigParser {
     /**
      * Parses a standard WireGuard INI-style configuration file (.conf)
      * e.g. Proton VPN, Mullvad, IVPN, or standard wg-quick configurations.
-     * Extracts server name, country flag, keys, endpoint and enforces MTU=1280.
+     * Extracts server name, country flag, keys, endpoint and interface MTU.
      */
     fun parse(rawText: String, fileName: String? = null): CustomWireGuardConfig {
         var privateKey = ""
@@ -80,8 +80,7 @@ object WireGuardConfigParser {
                             dnsList.addAll(parts)
                         }
                         "mtu" -> {
-                            // Enforce 1280 for WireGuard-in-WireGuard to prevent fragmentation
-                            mtu = 1280
+                            mtu = value.toIntOrNull()?.takeIf { it in 576..9000 } ?: 1280
                         }
                     }
                 }
@@ -126,12 +125,12 @@ object WireGuardConfigParser {
             addressV4 = addressV4List.joinToString(", "),
             addressV6 = addressV6List.joinToString(", "),
             dns = if (dnsList.isNotEmpty()) dnsList.joinToString(", ") else "1.1.1.1",
-            mtu = 1280, // Always enforce 1280
+            mtu = mtu,
             publicKey = publicKey,
             preSharedKey = preSharedKey,
             endpoint = endpoint,
-            allowedIpsV4 = if (allowedIpsV4List.isNotEmpty()) allowedIpsV4List.joinToString(", ") else "0.0.0.0/0",
-            allowedIpsV6 = if (allowedIpsV6List.isNotEmpty()) allowedIpsV6List.joinToString(", ") else "::/0",
+            allowedIpsV4 = allowedIpsV4List.joinToString(", "),
+            allowedIpsV6 = allowedIpsV6List.joinToString(", "),
             persistentKeepalive = keepalive,
             lastPingMs = -1L
         )

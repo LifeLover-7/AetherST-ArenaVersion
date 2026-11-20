@@ -11,15 +11,21 @@ import kotlin.concurrent.thread
 
 /** The only path is app -> this sing-box -> WireGuard peer, whose UDP socket is carried
  * by the already-running Aether SOCKS5 UDP ASSOCIATE. Never start a second WARP identity. */
-class WireGuardExitTunnel(
+class WireGuardExitTunnel internal constructor(
     private val config: CustomWireGuardConfig,
-    private val binaryPath: String? = null,
-    private val workingDir: String? = null,
-    private val primarySocksHost: String = "127.0.0.1",
-    private val primarySocksPort: Int = 2021,
-    val localListenPort: Int = 10805
+    private val binaryPath: String?,
+    private val workingDir: String?,
+    private val primarySocksHost: String,
+    private val primarySocksPort: Int,
+    val localListenPort: Int,
+    private val probe: (Int) -> String?
 ) {
+    constructor(config: CustomWireGuardConfig, binaryPath: String? = null, workingDir: String? = null,
+                primarySocksHost: String = "127.0.0.1", primarySocksPort: Int = 2021, localListenPort: Int = 10805) :
+        this(config, binaryPath, workingDir, primarySocksHost, primarySocksPort, localListenPort, { ExitIpProbe(it).check() })
+
     @Volatile private var process: Process? = null
+    private var control: WireGuardUdpControl? = null
     @Volatile var verifiedExitIp: String? = null
         private set
     @Volatile var lastErrorMessage: String? = null
@@ -31,13 +37,15 @@ class WireGuardExitTunnel(
         stop()
         lastErrorMessage = null
         return try {
-            val json = wireGuardExitConfig(config, primarySocksHost, primarySocksPort, localListenPort)
             val binary = binaryPath?.let(::File)?.takeIf { it.isFile }
                 ?: error("Bundled sing-box not found for this architecture")
             check(portListening(primarySocksHost, primarySocksPort)) { "Primary Aether SOCKS port is not listening" }
             check(!portListening("127.0.0.1", localListenPort) && !portListening("127.0.0.1", localListenPort - 1)) {
                 "WireGuard exit listener port is already in use"
             }
+            val association = WireGuardUdpControl(InetSocketAddress(primarySocksHost, primarySocksPort))
+            control = association
+            val json = wireGuardExitConfig(config, primarySocksHost, primarySocksPort, localListenPort, association.port)
             // sing-box 1.10.7 reads config from stdin until EOF. Do not persist private keys or log its IPC dump.
             val child = ProcessBuilder(binary.absolutePath, "run", "-c", "stdin")
                 .directory(workingDir?.let(::File)).redirectErrorStream(true).start()
@@ -53,8 +61,7 @@ class WireGuardExitTunnel(
             }
             check(child.isAlive) { "sing-box rejected the WireGuard configuration (exit ${child.exitValue()})" }
             check(portListening("127.0.0.1", localListenPort)) { "sing-box did not open its SOCKS listener" }
-            val probe = ExitIpProbe(localListenPort)
-            val ip = probe.check() ?: if (child.isAlive) probe.check() else null
+            val ip = probe(localListenPort) ?: if (child.isAlive) probe(localListenPort) else null
             check(ip != null && child.isAlive) {
                 "No data through the WireGuard exit. Check primary SOCKS5 UDP support and the configured peer/key."
             }
@@ -72,11 +79,12 @@ class WireGuardExitTunnel(
     @Synchronized
     fun stop() {
         verifiedExitIp = null
+        control?.close(); control = null
         val child = process ?: return
         process = null
         runCatching {
             child.destroy()
-            if (!child.waitFor(1500, TimeUnit.MILLISECONDS)) child.destroyForcibly()
+            if (!child.waitFor(1500, TimeUnit.MILLISECONDS)) child.destroyForcibly().waitFor(1500, TimeUnit.MILLISECONDS)
         }
     }
 
@@ -98,13 +106,12 @@ class WireGuardExitTunnel(
 
             val futures = valid.map { cfg ->
                 executor.submit {
-                    val endpoint = cfg.endpoint.substringBefore(':').trim()
-                    val port = cfg.endpoint.substringAfter(':', "51820").toIntOrNull() ?: 51820
+                    val endpoint = runCatching { HostPort.parse(cfg.endpoint) }.getOrNull() ?: return@submit
                     val start = System.currentTimeMillis()
                     var ping = -1L
                     try {
                         Socket().use { s ->
-                            s.connect(InetSocketAddress(endpoint, port), timeoutMs)
+                            s.connect(InetSocketAddress(endpoint.host, endpoint.port), timeoutMs)
                             ping = System.currentTimeMillis() - start
                         }
                     } catch (_: Exception) {

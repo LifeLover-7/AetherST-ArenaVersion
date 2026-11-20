@@ -44,10 +44,11 @@ class ExitTunnelTest {
             Endpoint = wg.example.test:55123
             AllowedIPs = 0.0.0.0/0, ::/0
         """.trimIndent())
-        val json = Json.parseToJsonElement(wireGuardExitConfig(cfg, "127.0.0.1", 3456, 10805)).jsonObject
-        val (first, exit) = json.getValue("outbounds").jsonArray.map { it.jsonObject }
+        val json = Json.parseToJsonElement(wireGuardExitConfig(cfg, "127.0.0.1", 3456, 10805, 3457)).jsonObject
+        val (first, exit, dnsHop) = json.getValue("outbounds").jsonArray.map { it.jsonObject }
         assertEquals("socks", first.getValue("type").jsonPrimitive.content)
-        assertEquals(3456, first.getValue("server_port").jsonPrimitive.int)
+        assertEquals(3457, first.getValue("server_port").jsonPrimitive.int)
+        assertEquals(3456, dnsHop.getValue("server_port").jsonPrimitive.int)
         assertEquals(first["tag"], exit["detour"])
         assertEquals(exit["tag"], json.getValue("route").jsonObject["final"])
         val peer = exit.getValue("peers").jsonArray.single().jsonObject
@@ -56,8 +57,8 @@ class ExitTunnelTest {
         assertEquals(listOf("10.2.0.2/32", "fd12::2/128"), exit.getValue("local_address").jsonArray.map { it.jsonPrimitive.content })
         val dns = json.getValue("dns").jsonObject
         assertEquals("wg.example.test", dns.getValue("rules").jsonArray.single().jsonObject.getValue("domain").jsonPrimitive.content)
-        assertFailsWith<IllegalArgumentException> { wireGuardExitConfig(cfg.copy(privateKey = "bad"), "127.0.0.1", 2021, 10805) }
-        assertFailsWith<IllegalArgumentException> { wireGuardExitConfig(cfg, "127.0.0.1", 10804, 10805) }
+        assertFailsWith<IllegalArgumentException> { wireGuardExitConfig(cfg.copy(privateKey = "bad"), "127.0.0.1", 2021, 10805, 3457) }
+        assertFailsWith<IllegalArgumentException> { wireGuardExitConfig(cfg, "127.0.0.1", 10804, 10805, 3457) }
         assertEquals(HostPort("2001:db8::1", 1234), HostPort.parse("[2001:db8::1]:1234"))
     }
 
@@ -89,7 +90,7 @@ class ExitTunnelTest {
             s.outputStream.write(byteArrayOf(5, 0, 0, 1, 127, 0, 0, 1, 0, 0))
             val ssl = serverTls.sslSocketFactory().createSocket(s, "edge.test", 443, true) as SSLSocket
             ssl.useClientMode = false
-            ssl.sslParameters = ssl.sslParameters.apply { applicationProtocols = arrayOf(alpn) }
+            ssl.sslParameters = ssl.sslParameters.apply { applicationProtocols = if (alpn.isEmpty()) emptyArray() else arrayOf(alpn) }
             ssl.startHandshake()
             if (alpn == "h2") {
                 Http2Connection.Builder(false, TaskRunner.INSTANCE).socket(ssl).listener(object : Http2Connection.Listener() {
@@ -136,16 +137,20 @@ class ExitTunnelTest {
                     assertTrue(tunnel.start(), tunnel.lastErrorMessage); assertTrue(tunnel.isHealthy())
                     assertEquals("192.0.2.7", tunnel.verifiedExitIp)
                     assertNotNull(roundTrip(port)); assertEquals(listOf("origin.test:443", "origin.test:443"), edge.opened)
+                    tunnel.stop(); assertNull(tunnel.verifiedExitIp)
+                    assertTrue(tunnel.start(), "Could not rebind the same verified exit: ${tunnel.lastErrorMessage}")
                 } else {
                     assertFalse(tunnel.start()); assertNull(tunnel.verifiedExitIp)
                     if (trusted) assertContains(tunnel.lastErrorMessage.orEmpty(), "$status") else assertTrue(edge.opened.isEmpty())
                 }
             } finally { tunnel.stop() }
-            assertFalse(portListening("127.0.0.1", port)); assertFalse(portListening("127.0.0.1", port - 1))
+            assertFalse(portListening("127.0.0.1", port), "SOCKS port $port still open")
+            assertFalse(portListening("127.0.0.1", port - 1), "HTTP port ${port-1} still open")
         }
     }
     @Test(timeout = 25000) fun firefoxH2RoundTripWhileStartIsWaiting() = exercise("h2", 200)
     @Test(timeout = 25000) fun firefoxH1RoundTripAndSecondSocket() = exercise("http/1.1", 200)
+    @Test(timeout = 25000) fun noAlpnUsesClassicHttp11() = exercise("", 200)
     @Test(timeout = 15000) fun rejectedConnectIsNotReady() = exercise("h2", 407)
     @Test(timeout = 15000) fun untrustedEdgeNeverReceivesPass() = exercise("http/1.1", 200, trusted = false)
 }

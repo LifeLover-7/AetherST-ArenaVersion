@@ -33,6 +33,7 @@ import androidx.compose.ui.unit.*
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import io.github.immaghzbad.aetherst.platform.*
+import io.github.immaghzbad.aetherst.shared.data.ActiveProxyProvider
 import io.github.immaghzbad.aetherst.shared.data.IpInfo
 import io.github.immaghzbad.aetherst.shared.data.PingState
 import io.github.immaghzbad.aetherst.shared.data.PsiphonEgressRegistry
@@ -236,8 +237,9 @@ fun DashboardScreen(
                     scaleFactor = scaleFactor
                 )
 
-                if (isWindows && (connectionStatus == ConnectionStatus.RUNNING || connectionStatus == ConnectionStatus.TUN_ACTIVE)) {
-                    WindowsProxyPortsCard(config = config, onCopy = onCopy, scaleFactor = scaleFactor)
+                if ((isWindows || (config.connectionMode == ConnectionMode.PROXY_ONLY && config.exitNodeMode.needsVpnExit)) &&
+                    (connectionStatus == ConnectionStatus.RUNNING || connectionStatus == ConnectionStatus.TUN_ACTIVE)) {
+                    ProxyPortsCard(config = config, onCopy = onCopy, scaleFactor = scaleFactor)
                 }
             }
 
@@ -765,7 +767,12 @@ fun IosStatusHeroCard(
 }
 
 @Composable
-fun WindowsProxyPortsCard(config: AetherConfig, onCopy: (String) -> Unit, scaleFactor: Float) {
+fun ProxyPortsCard(config: AetherConfig, onCopy: (String) -> Unit, scaleFactor: Float) {
+    // Never offer Layer 1 as a copyable substitute for an unavailable Layer 2.
+    val exit = if (config.exitNodeMode.needsVpnExit) ActiveProxyProvider.vpnExitPort(config.exitNodeMode) ?: return else null
+    val host = if (exit == null) config.socksHost else "127.0.0.1"
+    val socks = "$host:${exit ?: config.socksPort}"
+    val http = "$host:${exit?.minus(1) ?: config.httpPort}"
     Card(
         modifier = Modifier.fillMaxWidth(),
         shape = RoundedCornerShape(16.dp),
@@ -783,9 +790,9 @@ fun WindowsProxyPortsCard(config: AetherConfig, onCopy: (String) -> Unit, scaleF
                 color = IosSecondaryLabel,
                 fontSize = (8.5 * scaleFactor).sp
             )
-            ProxyCopyRow(label = "Core Socks", address = "${config.socksHost}:${config.socksPort}", onCopy = { onCopy("${config.socksHost}:${config.socksPort}") }, scaleFactor = scaleFactor)
+            ProxyCopyRow(label = if (exit == null) "Core SOCKS" else "Exit SOCKS", address = socks, onCopy = { onCopy(socks) }, scaleFactor = scaleFactor)
             HorizontalDivider(color = Color.White.copy(alpha = 0.08f), thickness = 0.5.dp)
-            ProxyCopyRow(label = "Core HTTP", address = "${config.socksHost}:${config.httpPort}", onCopy = { onCopy("${config.socksHost}:${config.httpPort}") }, scaleFactor = scaleFactor)
+            ProxyCopyRow(label = if (exit == null) "Core HTTP" else "Exit HTTP", address = http, onCopy = { onCopy(http) }, scaleFactor = scaleFactor)
         }
     }
 }

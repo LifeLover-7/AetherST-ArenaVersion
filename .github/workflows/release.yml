@@ -34,7 +34,19 @@ jobs:
         with:
           go-version: '1.24.x'
           cache: false
-      - run: bash tools/exit-test/run.sh
+      - name: Exercise both exits (Android local unit tests)
+        run: bash tools/exit-test/run.sh
+      - name: Report each loopback test
+        if: always()
+        run: |
+          python3 - <<'PYTEST'
+          import glob, xml.etree.ElementTree as ET
+          cases = [t for f in glob.glob('composeApp/build/test-results/testReleaseUnitTest/TEST-*.xml') for t in ET.parse(f).iter('testcase')]
+          for t in cases:
+              bad = next((x for x in t if x.tag in ('failure', 'error', 'skipped')), None)
+              print(f"::{'error' if bad is not None else 'notice'} title=Loopback test::{t.get('name')}: {bad.get('type', bad.tag) if bad is not None else 'PASS'}")
+          assert cases and not any(t.find(k) is not None for t in cases for k in ('failure','error','skipped')), 'Expected the data-plane tests to run and pass'
+          PYTEST
 
   build:
     name: Build Android APK

@@ -692,9 +692,9 @@ private fun hasActiveNetworkInterface(): Boolean {
         }
 
         val effectivePort = when (cfg.exitNodeMode) {
-            ExitNodeMode.CUSTOM_WG -> ActiveProxyProvider.customWgPort ?: 10805
+            ExitNodeMode.CUSTOM_WG -> ActiveProxyProvider.customWgPort ?: return
             ExitNodeMode.CUSTOM_SOCKS5 -> 10806
-            ExitNodeMode.FIREFOX_VPN -> ActiveProxyProvider.firefoxVpnPort ?: cfg.firefoxVpnPort
+            ExitNodeMode.FIREFOX_VPN -> ActiveProxyProvider.firefoxVpnPort ?: return
             ExitNodeMode.PSIPHON_POOL -> {
                 val psiphon = ActiveProxyProvider.psiphonProxyUrl
                 if (!psiphon.isNullOrEmpty()) {
@@ -714,7 +714,7 @@ private fun hasActiveNetworkInterface(): Boolean {
             }
         }
 
-        val tor = ActiveProxyProvider.torProxyUrl
+        val tor = ActiveProxyProvider.torProxyUrl.takeUnless { cfg.exitNodeMode.needsVpnExit }
         if (!tor.isNullOrEmpty()) {
             val body = tor.removePrefix("socks5://").removePrefix("socks://")
             val parts = body.split(":", limit = 2)
@@ -739,16 +739,16 @@ private fun hasActiveNetworkInterface(): Boolean {
                     PingRepository.reset()
                     return@launch
                 }
-                val tor = ActiveProxyProvider.torProxyUrl
+                val tor = ActiveProxyProvider.torProxyUrl.takeUnless { cfg.exitNodeMode.needsVpnExit }
                 if (!tor.isNullOrEmpty()) {
                     val body = tor.removePrefix("socks5://").removePrefix("socks://")
                     val parts = body.split(":", limit = 2)
                     PingRepository.runPing(parts.first(), parts.getOrNull(1)?.toIntOrNull() ?: 3081, useProxy = true, pingUrl = cfg.pingUrl)
                 } else {
                     val exitPort = when (cfg.exitNodeMode) {
-                        ExitNodeMode.CUSTOM_WG -> ActiveProxyProvider.customWgPort ?: 10805
+                        ExitNodeMode.CUSTOM_WG -> ActiveProxyProvider.customWgPort ?: return@launch
                         ExitNodeMode.CUSTOM_SOCKS5 -> 10806
-                        ExitNodeMode.FIREFOX_VPN -> ActiveProxyProvider.firefoxVpnPort ?: cfg.firefoxVpnPort
+                        ExitNodeMode.FIREFOX_VPN -> ActiveProxyProvider.firefoxVpnPort ?: return@launch
                         ExitNodeMode.PSIPHON_POOL -> {
                             val psiphon = ActiveProxyProvider.psiphonProxyUrl
                             if (!psiphon.isNullOrEmpty()) {
@@ -767,7 +767,7 @@ private fun hasActiveNetworkInterface(): Boolean {
                             }
                         }
                     }
-                    PingRepository.runPing(cfg.socksHost, exitPort, useProxy = true, pingUrl = cfg.pingUrl)
+                    PingRepository.runPing(if (cfg.exitNodeMode.needsVpnExit) "127.0.0.1" else cfg.socksHost, exitPort, useProxy = true, pingUrl = cfg.pingUrl)
                 }
             } else {
                 PingRepository.reset()
@@ -820,7 +820,7 @@ private fun hasActiveNetworkInterface(): Boolean {
                             LogRepository.i("MIM guard active, deferring IP/ping until final RUNNING", "IpWhois")
                             return@collect
                         }
-                        val tor = ActiveProxyProvider.torProxyUrl
+                        val tor = ActiveProxyProvider.torProxyUrl.takeUnless { cfg.exitNodeMode.needsVpnExit }
                         val host: String
                         val port: Int
                         if (!tor.isNullOrEmpty()) {
@@ -831,9 +831,9 @@ private fun hasActiveNetworkInterface(): Boolean {
                         } else {
                             host = "127.0.0.1"
                             port = when (cfg.exitNodeMode) {
-                                ExitNodeMode.CUSTOM_WG -> ActiveProxyProvider.customWgPort ?: 10805
+                                ExitNodeMode.CUSTOM_WG -> ActiveProxyProvider.customWgPort ?: return@collect
                                 ExitNodeMode.CUSTOM_SOCKS5 -> 10806
-                                ExitNodeMode.FIREFOX_VPN -> ActiveProxyProvider.firefoxVpnPort ?: cfg.firefoxVpnPort
+                                ExitNodeMode.FIREFOX_VPN -> ActiveProxyProvider.firefoxVpnPort ?: return@collect
                                 ExitNodeMode.PSIPHON_POOL -> {
                                     val psiphon = ActiveProxyProvider.psiphonProxyUrl
                                     if (!psiphon.isNullOrEmpty()) {
@@ -855,20 +855,6 @@ private fun hasActiveNetworkInterface(): Boolean {
                         }
                         val pingUrl = cfg.pingUrl
                         viewModelScope.launch {
-                            // If a secondary exit node is active, give AetherVpnService a moment to bind the Layer-2 port
-                            if (cfg.exitNodeMode != ExitNodeMode.DIRECT) {
-                                var waitLoops = 0
-                                while (waitLoops < 20) {
-                                    val ready = when (cfg.exitNodeMode) {
-                                        ExitNodeMode.CUSTOM_WG -> ActiveProxyProvider.customWgPort != null
-                                        ExitNodeMode.FIREFOX_VPN -> ActiveProxyProvider.firefoxVpnPort != null
-                                        else -> true
-                                    }
-                                    if (ready) break
-                                    delay(350.milliseconds)
-                                    waitLoops++
-                                }
-                            }
                             PingRepository.runPing(host, port, useProxy = true, pingUrl = pingUrl)
                             delay(500.milliseconds)
                             fetchPublicIp()

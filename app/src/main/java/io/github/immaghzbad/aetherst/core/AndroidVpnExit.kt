@@ -13,12 +13,11 @@ internal class AndroidVpnExit(private val context: Context) {
     private var firefox: FirefoxVpnExitTunnel? = null
 
     @Synchronized
-    fun start(config: AetherConfig, refresh: Boolean): Int {
+    fun start(config: AetherConfig): Int {
+        stop()
         val primaryPort = config.socksPort.toIntOrNull() ?: 2021
         return when (config.exitNodeMode) {
             ExitNodeMode.CUSTOM_WG -> {
-                wg?.let { if (!refresh && it.isHealthy()) return it.localListenPort }
-                stop()
                 val profile = if (config.customWgAutoSelect) WireGuardExitTunnel.selectFastestProfile(config.customWgProfiles, config.customWgConfig)
                     else config.customWgConfig
                 val tunnel = WireGuardExitTunnel(profile, BinaryManager.prepareSingBoxBinary(context)?.absolutePath,
@@ -28,8 +27,6 @@ internal class AndroidVpnExit(private val context: Context) {
                 tunnel.localListenPort.also { ActiveProxyProvider.customWgPort = it }
             }
             ExitNodeMode.FIREFOX_VPN -> {
-                firefox?.let { if (!refresh && it.isHealthy()) return it.localListenPort }
-                stop()
                 val tunnel = FirefoxVpnExitTunnel(config.firefoxVpnToken, config.firefoxVpnCountry,
                     primarySocksPort = primaryPort, localListenPort = config.firefoxVpnPort)
                 check(tunnel.start()) { tunnel.lastErrorMessage ?: "Firefox exit unavailable" }

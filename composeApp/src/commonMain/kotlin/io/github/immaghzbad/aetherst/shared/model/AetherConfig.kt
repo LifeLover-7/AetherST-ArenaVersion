@@ -384,8 +384,8 @@ data class AetherConfig(
     }
 
     fun effectiveIpMode(): AetherIpMode = if (ipMode == AetherIpMode.AUTO) AetherIpMode.DUAL else ipMode
-    fun isPsiphonActive(): Boolean = (chainProvider == ChainProvider.PSIPHON && psiphonEnabled) || exitNodeMode == ExitNodeMode.PSIPHON_POOL
-    fun isTorActive(): Boolean = chainProvider == ChainProvider.TOR && torEnabled
+    fun isPsiphonActive(): Boolean = !exitNodeMode.needsVpnExit && ((chainProvider == ChainProvider.PSIPHON && psiphonEnabled) || exitNodeMode == ExitNodeMode.PSIPHON_POOL)
+    fun isTorActive(): Boolean = !exitNodeMode.needsVpnExit && chainProvider == ChainProvider.TOR && torEnabled
 }
 
 object SplitTunnelAppManager {

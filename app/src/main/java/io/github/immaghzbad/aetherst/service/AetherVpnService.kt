@@ -46,7 +46,6 @@ import io.github.immaghzbad.aetherst.shared.model.RoutingMode
 import io.github.immaghzbad.aetherst.shared.model.SocksReadiness
 import io.github.immaghzbad.aetherst.shared.model.TunnelEngine
 import io.github.immaghzbad.aetherst.shared.net.CustomSocks5Relay
-import io.github.immaghzbad.aetherst.core.AndroidVpnExit
 import io.github.immaghzbad.aetherst.shared.model.AetherConfig
 import io.github.immaghzbad.aetherst.shared.platform.Bridge
 import io.github.immaghzbad.aetherst.shared.util.WireGuardConfigParser
@@ -82,7 +81,6 @@ class AetherVpnService : VpnService() {
     private var customSocksRelay: CustomSocks5Relay? = null
     private val exitTunnelLock = Any()
     @Volatile private var exitTunnelNeedsRefresh = false
-    private val vpnExit by lazy { AndroidVpnExit(applicationContext) }
 
     private var wakeLock: PowerManager.WakeLock? = null
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
@@ -250,7 +248,8 @@ class AetherVpnService : VpnService() {
                     }
                     delay(3000.milliseconds)
                     if (ConnectionController.status.value == ConnectionStatus.RECONNECTING) {
-                        getController().start()
+                        if (config.exitNodeMode.needsVpnExit) restartTunnel(commandCounter.incrementAndGet())
+                        else getController().start()
                     }
                 }
             }
@@ -286,6 +285,10 @@ class AetherVpnService : VpnService() {
                     attempts++
                     LogRepository.i("[VpnService] Auto-reconnect attempt $attempts/${cfg.reconnectRetryLimit} from $cur")
                     try {
+                        if (cfg.exitNodeMode.needsVpnExit) {
+                            restartTunnel(commandCounter.incrementAndGet())
+                            return@launch
+                        }
                         getController().start()
                     } catch (e: Exception) {
                         LogRepository.e("[VpnService] Auto-reconnect start failed: ${e.message}")
@@ -698,7 +701,6 @@ class AetherVpnService : VpnService() {
                 socksBridge?.stop()
                 socksBridge = null
                 synchronized(exitTunnelLock) {
-                    vpnExit.stop()
                     customSocksRelay?.stop()
                     customSocksRelay = null
                 }
@@ -897,7 +899,8 @@ class AetherVpnService : VpnService() {
                 return "127.0.0.1" to poolPort
             }
             ExitNodeMode.CUSTOM_WG, ExitNodeMode.FIREFOX_VPN -> {
-                return "127.0.0.1" to vpnExit.start(config, forceRefresh)
+                val port = ActiveProxyProvider.vpnExitPort(config.exitNodeMode) ?: error("No verified VPN exit listener")
+                return "127.0.0.1" to port
             }
             ExitNodeMode.CUSTOM_SOCKS5 -> {
                 val localPort = 10806

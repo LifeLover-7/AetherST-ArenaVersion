@@ -57,10 +57,10 @@ kotlin {
                 implementation(libs.androidx.datastore.preferences)
                 implementation(libs.androidsvg)
             }
-        }
-        getByName("desktopTest").dependencies {
-            implementation(kotlin("test-junit"))
-            implementation("com.squareup.okhttp3:okhttp-tls:${libs.versions.okhttp.get()}")
+            getByName("androidUnitTest").dependencies {
+                implementation(kotlin("test-junit"))
+                implementation("com.squareup.okhttp3:okhttp-tls:${libs.versions.okhttp.get()}")
+            }
         }
         getByName("desktopMain").dependencies {
             implementation("net.java.dev.jna:jna:5.14.0")
@@ -111,7 +111,7 @@ val buildCloakWindows by tasks.registering(Exec::class) {
     }
 }
 tasks.named<ProcessResources>("desktopProcessResources") {
-    if (System.getProperty("os.name").startsWith("Windows", ignoreCase = true)) dependsOn(buildCloakWindows)
+    dependsOn(buildCloakWindows)
     // Avoid duplicate bundling in JAR; appResourcesRootDir provides binaries externally in the distribution
     exclude("bin/**")
 }

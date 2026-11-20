@@ -42,7 +42,8 @@ class ConnectionController private constructor(context: Context) : ConnectionCon
     private val appContext = context.applicationContext
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val runner = AetherProcessRunner(appContext)
-    private val proxyModeExit = AndroidVpnExit(appContext)
+    private val vpnExit = AndroidVpnExit(appContext)
+    @Volatile private var activeExitConfig: AetherConfig? = null
     @Volatile private var awaitingVpnExit = false
     private val mutex = Mutex()
     private val activeAttemptId = AtomicLong(0)
@@ -175,7 +176,8 @@ class ConnectionController private constructor(context: Context) : ConnectionCon
                     LogRepository.i("[Controller] Cloak active, routing MASQUE via ${effectiveConfig.peer}")
                 }
             }
-            awaitingVpnExit = effectiveConfig.exitNodeMode.needsVpnExit
+            activeExitConfig = effectiveConfig.takeIf { it.exitNodeMode.needsVpnExit }
+            awaitingVpnExit = activeExitConfig != null
             val psiphonSupported = !awaitingVpnExit && PsiphonController.isSupported(effectiveConfig) && effectiveConfig.chainProvider == ChainProvider.PSIPHON
             val torSupported = !awaitingVpnExit && TorController.isSupported(effectiveConfig) && effectiveConfig.chainProvider == ChainProvider.TOR
 
@@ -1076,9 +1078,11 @@ class ConnectionController private constructor(context: Context) : ConnectionCon
     private suspend fun finishCoreStart(config: AetherConfig, attemptId: Long): Boolean {
         if (torChaining) return true
         val holdForLayer2Tun = config.connectionMode == ConnectionMode.TUNNEL && config.exitNodeMode != ExitNodeMode.DIRECT
-        val port = if (config.exitNodeMode.needsVpnExit && config.connectionMode != ConnectionMode.TUNNEL) {
+        val port = if (config.exitNodeMode.needsVpnExit) {
             notifyStatusChanged(appContext, ConnectionStatus.VALIDATING)
-            proxyModeExit.start(config, refresh = true).also { awaitingVpnExit = false }
+            runInterruptible(Dispatchers.IO) { vpnExit.start(config) }.also {
+                if (!holdForLayer2Tun) awaitingVpnExit = false
+            }
         } else config.socksPort.toIntOrNull() ?: 2021
         publishCoreActive(port, attemptId, holdForLayer2Tun)
         return true
@@ -1240,7 +1244,8 @@ class ConnectionController private constructor(context: Context) : ConnectionCon
     }
 
     override suspend fun stop() {
-        proxyModeExit.stop()
+        activeExitConfig = null
+        withContext(Dispatchers.IO) { vpnExit.stop() }
         awaitingVpnExit = false
         stopTimer()
         runCatching { runner.stop() }
@@ -1317,7 +1322,8 @@ class ConnectionController private constructor(context: Context) : ConnectionCon
 
     @Suppress("UNUSED_EXPRESSION")
     private suspend fun cleanup(attemptId: Long) {
-        proxyModeExit.stop()
+        activeExitConfig = null
+        withContext(Dispatchers.IO) { vpnExit.stop() }
         awaitingVpnExit = false
         if (activeAttemptId.get() == attemptId) {
             activeAttemptId.set(0)
@@ -1331,15 +1337,36 @@ class ConnectionController private constructor(context: Context) : ConnectionCon
         delay(500.milliseconds)
     }
 
-    private fun handleCoreStatus(coreStatus: ConnectionStatus) {
+    private suspend fun handleCoreStatus(coreStatus: ConnectionStatus) {
+        val config = activeExitConfig
+        if (config != null && (coreStatus == ConnectionStatus.SOCKS_READY || coreStatus == ConnectionStatus.RUNNING)) {
+            // Layer 1 may emit either signal before finishCoreStart (or before the TUN is attached).
+            if (awaitingVpnExit) return
+            if (_status.value == ConnectionStatus.RECONNECTING) {
+                val attempt = activeAttemptId.get()
+                awaitingVpnExit = true
+                notifyStatusChanged(appContext, ConnectionStatus.VALIDATING)
+                val result = runCatching { runInterruptible(Dispatchers.IO) { vpnExit.start(config) } }
+                if (activeAttemptId.get() != attempt || activeExitConfig !== config || _status.value != ConnectionStatus.VALIDATING) return
+                if (result.isFailure) {
+                    LogRepository.e("[Controller] Exit revalidation failed: ${result.exceptionOrNull()?.message}")
+                    stopTimer()
+                    notifyStatusChanged(appContext, ConnectionStatus.ERROR)
+                } else {
+                    awaitingVpnExit = false
+                    val ready = runner.connectionStatus.value in setOf(ConnectionStatus.SOCKS_READY, ConnectionStatus.RUNNING)
+                    if (ready) resumeTimer()
+                    notifyStatusChanged(appContext, if (ready) ConnectionStatus.RUNNING else ConnectionStatus.RECONNECTING)
+                }
+                return
+            }
+        }
         _status.update { current ->
             if (current == ConnectionStatus.STOPPED) return@update current
             if (psiphonChaining || torChaining) return@update current
             if (current == ConnectionStatus.STOPPING && coreStatus != ConnectionStatus.STOPPED) {
                 return@update current
             }
-
-            if (awaitingVpnExit && coreStatus == ConnectionStatus.RUNNING) return@update current
 
             val next = when (coreStatus) {
                 ConnectionStatus.ERROR -> {

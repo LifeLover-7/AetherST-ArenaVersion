@@ -76,6 +76,8 @@ class FirefoxVpnExitTunnel internal constructor(
     @Volatile private var currentProxyPass = ""
     @Volatile private var rejected: ConnectRejected? = null
     private var renewalThread: Thread? = null
+    private var socksAcceptor: Thread? = null
+    private var httpAcceptor: Thread? = null
     private val clients = ConcurrentHashMap.newKeySet<Socket>()
     private val executor = Executors.newCachedThreadPool { r -> Thread(r, "FirefoxVPN-worker").apply { isDaemon = true } }
 
@@ -138,6 +140,10 @@ class FirefoxVpnExitTunnel internal constructor(
         runCatching { socksServerSocket?.close() }; socksServerSocket = null
         runCatching { httpServerSocket?.close() }; httpServerSocket = null
         runCatching { udpRelaySocket?.close() }; udpRelaySocket = null
+        // On the JVM, a closed listener can still own its fd while accept() is unwinding.
+        // Finish both accept loops before closing their clients / rebinding the same ports.
+        socksAcceptor?.join(1000); socksAcceptor = null
+        httpAcceptor?.join(1000); httpAcceptor = null
         clients.forEach { runCatching { it.close() } }
         synchronized(sessionLock) { session?.close(); session = null; currentEdge = null }
         currentProxyPass = ""
@@ -189,7 +195,7 @@ class FirefoxVpnExitTunnel internal constructor(
         server.bind(InetSocketAddress("127.0.0.1", port), 256)
         socksServerSocket = server
 
-        thread(start = true, isDaemon = true, name = "FirefoxVPN-Socks5") {
+        socksAcceptor = thread(start = true, isDaemon = true, name = "FirefoxVPN-Socks5") {
             while (isRunning.get() && !server.isClosed) {
                 val client = try {
                     server.accept()
@@ -417,7 +423,7 @@ class FirefoxVpnExitTunnel internal constructor(
         server.bind(InetSocketAddress("127.0.0.1", port), 128)
         httpServerSocket = server
 
-        thread(start = true, isDaemon = true, name = "FirefoxVPN-HttpProxy") {
+        httpAcceptor = thread(start = true, isDaemon = true, name = "FirefoxVPN-HttpProxy") {
             while (isRunning.get() && !server.isClosed) {
                 val client = try {
                     server.accept()
