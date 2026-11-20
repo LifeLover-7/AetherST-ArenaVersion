@@ -136,6 +136,14 @@ object WireGuardConfigParser {
         )
     }
 
+    /** Older releases retained the imported file but discarded its peer PSK in structured settings. */
+    fun restoreLegacyPsk(profile: CustomWireGuardConfig): CustomWireGuardConfig {
+        if (profile.preSharedKey.isNotBlank() || !profile.rawConfig.contains("presharedkey", ignoreCase = true)) return profile
+        val imported = parse(profile.rawConfig)
+        return if (profile.publicKey == imported.publicKey && profile.privateKey == imported.privateKey)
+            profile.copy(preSharedKey = imported.preSharedKey) else profile
+    }
+
     /**
      * Formats server name and prefixes with Country Flag emoji if country code is recognized.
      * e.g. "NL-FREE#123456" -> "🇳🇱 NL-FREE#123456"

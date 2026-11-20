@@ -84,6 +84,7 @@ internal class WireGuardUdpControl(private val primary: InetSocketAddress) : Clo
 
     override fun close() {
         server.close()
-        try { acceptor.join(1000) } finally { sockets.forEach { runCatching { it.close() } } }
+        try { acceptor.join(1000) } catch (_: InterruptedException) { Thread.currentThread().interrupt() }
+        finally { sockets.forEach { runCatching { it.close() } } }
     }
 }

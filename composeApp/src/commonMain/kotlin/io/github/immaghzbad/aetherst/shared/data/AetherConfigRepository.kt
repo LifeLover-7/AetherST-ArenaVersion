@@ -1,6 +1,7 @@
 package io.github.immaghzbad.aetherst.shared.data
 
 import io.github.immaghzbad.aetherst.shared.model.*
+import io.github.immaghzbad.aetherst.shared.util.WireGuardConfigParser
 import io.github.immaghzbad.aetherst.platform.Settings
 import io.github.immaghzbad.aetherst.platform.isDesktop
 import io.github.immaghzbad.aetherst.platform.isWindows
@@ -249,7 +250,7 @@ class AetherConfigRepository private constructor(private val settings: Settings)
             allowedIpsV4 = settings.getString("${prefix}custom_wg_allowed_v4", "0.0.0.0/0"),
             allowedIpsV6 = settings.getString("${prefix}custom_wg_allowed_v6", "::/0"),
             persistentKeepalive = settings.getInt("${prefix}custom_wg_keepalive", 25)
-        )
+        ).let(WireGuardConfigParser::restoreLegacyPsk)
     }
 
     private fun saveCustomWgConfig(prefix: String, wg: CustomWireGuardConfig) {
@@ -273,7 +274,7 @@ class AetherConfigRepository private constructor(private val settings: Settings)
         val rawJson = settings.getString("${prefix}custom_wg_profiles_json", "")
         if (rawJson.isNotBlank()) {
             try {
-                return Json.decodeFromString(rawJson)
+                return Json.decodeFromString<List<CustomWireGuardConfig>>(rawJson).map(WireGuardConfigParser::restoreLegacyPsk)
             } catch (_: Exception) {}
         }
         val single = loadCustomWgConfig(prefix)

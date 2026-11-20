@@ -142,8 +142,10 @@ class FirefoxVpnExitTunnel internal constructor(
         runCatching { udpRelaySocket?.close() }; udpRelaySocket = null
         // On the JVM, a closed listener can still own its fd while accept() is unwinding.
         // Finish both accept loops before closing their clients / rebinding the same ports.
-        socksAcceptor?.join(1000); socksAcceptor = null
-        httpAcceptor?.join(1000); httpAcceptor = null
+        for (acceptor in listOfNotNull(socksAcceptor, httpAcceptor)) {
+            try { acceptor.join(1000) } catch (_: InterruptedException) { Thread.currentThread().interrupt() }
+        }
+        socksAcceptor = null; httpAcceptor = null
         clients.forEach { runCatching { it.close() } }
         synchronized(sessionLock) { session?.close(); session = null; currentEdge = null }
         currentProxyPass = ""
@@ -779,15 +781,19 @@ class FirefoxVpnExitTunnel internal constructor(
 
             val currentOAuth = oauthAccessToken
             if (!currentOAuth.isNullOrBlank()) {
-                val jwt = runCatching { requestGuardianProxyPass(client, currentOAuth) }.getOrNull()
-                if (!jwt.isNullOrBlank()) return jwt
+                try {
+                    requestGuardianProxyPass(client, currentOAuth)?.let { return it }
+                } catch (e: GuardianRefused) {
+                    // Only an expired OAuth token may be refreshed with the user's existing FxA session.
+                    if (e.status != 401 || sessionTokenHex == null) throw e
+                }
             }
 
             val currentSession = sessionTokenHex
             if (!currentSession.isNullOrBlank()) {
                 val mintedOAuth = runCatching { exchangeSessionTokenForOAuth(client, currentSession) }.getOrNull()
                 if (!mintedOAuth.isNullOrBlank()) {
-                    val jwt = runCatching { requestGuardianProxyPass(client, mintedOAuth) }.getOrNull()
+                    val jwt = requestGuardianProxyPass(client, mintedOAuth)
                     if (!jwt.isNullOrBlank()) return jwt
                 }
             }
@@ -823,8 +829,11 @@ class FirefoxVpnExitTunnel internal constructor(
                         sessionTokenHex = Regex(""""sessionToken"\s*:\s*"([0-9a-fA-F]{64})"""").find(trimmed)?.groupValues?.get(1)
                         oauthAccessToken = Regex(""""access_token"\s*:\s*"([^"]+)"""").find(trimmed)?.groupValues?.get(1)
                         val proxyMatch = Regex(""""(?:proxypass|token)"\s*:\s*"(eyJ[^"]+)"""").find(trimmed)
-                        if (proxyMatch != null && sessionTokenHex.isNullOrBlank()) {
-                            return@runCatching proxyMatch.groupValues[1]
+                        if (proxyMatch != null) {
+                            val pass = proxyMatch.groupValues[1]
+                            // A short-lived pass alone cannot renew a legitimate OAuth session.
+                            return@runCatching if (sessionTokenHex == null && oauthAccessToken == null) pass
+                                else "fxa:${sessionTokenHex.orEmpty()}:${oauthAccessToken.orEmpty()}:$pass"
                         }
                     }
                     trimmed.matches(Regex("""^[0-9a-fA-F]{64}$""")) -> {
@@ -859,8 +868,8 @@ class FirefoxVpnExitTunnel internal constructor(
                         "fxa:$sessHex:$oauthTok"
                     !sessHex.isNullOrBlank() ->
                         sessHex
-                    !proxyPassJwt.isNullOrBlank() ->
-                        proxyPassJwt
+                    !proxyPassJwt.isNullOrBlank() && !oauthTok.isNullOrBlank() ->
+                        "fxa::$oauthTok:$proxyPassJwt"
                     !oauthTok.isNullOrBlank() ->
                         oauthTok
                     else ->
@@ -1111,12 +1120,14 @@ class FirefoxVpnExitTunnel internal constructor(
             throw IllegalStateException("FxA OAuth token exchange failed ($lastErr)")
         }
 
+        private class GuardianRefused(val status: Int) : IllegalStateException("Firefox VPN authorization rejected (HTTP $status)")
+
         private fun requestGuardianProxyPass(client: OkHttpClient, fxaAccessToken: String): String? {
             val req = Request.Builder().url("$GUARDIAN_API_BASE/api/v1/fpn/token")
                 .header("Authorization", "Bearer $fxaAccessToken").header("User-Agent", MOZILLA_VPN_UA)
                 .header("Accept", "application/json").build()
             return client.newCall(req).execute().use { resp ->
-                if (!resp.isSuccessful) throw IllegalStateException("Firefox VPN authorization rejected (HTTP ${resp.code})")
+                if (!resp.isSuccessful) throw GuardianRefused(resp.code)
                 val obj = jsonParser.parseToJsonElement(resp.body?.string() ?: return@use null).jsonObject
                 (obj["token"] ?: obj["proxypass"] ?: obj["proxy_pass"])?.jsonPrimitive?.content
             }
@@ -1196,7 +1207,7 @@ class FirefoxVpnExitTunnel internal constructor(
             return try {
                 val payloadJson = String(Base64.getUrlDecoder().decode(parts[1]), Charsets.UTF_8)
                 val exp = Regex(""""exp"\s*:\s*(\d+)""").find(payloadJson)?.groupValues?.get(1)?.toLongOrNull()
-                    ?: return true
+                    ?: return false
                 val nowSec = System.currentTimeMillis() / 1000L
                 exp - nowSec > minRemainingSec
             } catch (_: Exception) {

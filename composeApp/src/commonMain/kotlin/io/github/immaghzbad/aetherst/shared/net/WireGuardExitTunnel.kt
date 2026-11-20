@@ -82,9 +82,12 @@ class WireGuardExitTunnel internal constructor(
         control?.close(); control = null
         val child = process ?: return
         process = null
-        runCatching {
-            child.destroy()
+        child.destroy()
+        try {
             if (!child.waitFor(1500, TimeUnit.MILLISECONDS)) child.destroyForcibly().waitFor(1500, TimeUnit.MILLISECONDS)
+        } catch (_: InterruptedException) {
+            child.destroyForcibly()
+            Thread.currentThread().interrupt()
         }
     }
 

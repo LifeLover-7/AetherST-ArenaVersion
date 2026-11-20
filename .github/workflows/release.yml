@@ -19,7 +19,7 @@ jobs:
     name: Loopback chain tests
     if: inputs.arm64_only
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 20
     permissions:
       contents: read
     steps:
@@ -34,8 +34,21 @@ jobs:
         with:
           go-version: '1.24.x'
           cache: false
+      - name: Accept Android SDK licenses for the test build
+        run: yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses >/dev/null || true
       - name: Exercise both exits (Android local unit tests)
-        run: bash tools/exit-test/run.sh
+        shell: bash
+        run: |
+          set -o pipefail
+          if ! bash tools/exit-test/run.sh 2>&1 | tee "$RUNNER_TEMP/exit-tests.log"; then
+            python3 - <<'DIAG'
+          import os, pathlib
+          lines = pathlib.Path(os.environ['RUNNER_TEMP'], 'exit-tests.log').read_text(errors='replace').splitlines()
+          for line in [l for l in lines if l.strip() and not l.startswith('::')][-25:]:
+              print('::error title=Loopback diagnostics::' + line[:750].replace('%', '%25'))
+          DIAG
+            exit 1
+          fi
       - name: Report each loopback test
         if: always()
         run: |
@@ -44,8 +57,9 @@ jobs:
           cases = [t for f in glob.glob('composeApp/build/test-results/testReleaseUnitTest/TEST-*.xml') for t in ET.parse(f).iter('testcase')]
           for t in cases:
               bad = next((x for x in t if x.tag in ('failure', 'error', 'skipped')), None)
-              print(f"::{'error' if bad is not None else 'notice'} title=Loopback test::{t.get('name')}: {bad.get('type', bad.tag) if bad is not None else 'PASS'}")
-          assert cases and not any(t.find(k) is not None for t in cases for k in ('failure','error','skipped')), 'Expected the data-plane tests to run and pass'
+              print(f"::{'error' if bad is not None else 'notice'} title=Loopback test::{t.get('name')}: {bad.get('message', bad.tag)[:300] if bad is not None else 'PASS'}")
+          assert {'ExitTunnelTest','WireGuardDataPlaneTest'} <= {t.get('classname','').split('.')[-1] for t in cases}
+          assert not any(t.find(k) is not None for t in cases for k in ('failure','error','skipped')), 'Expected the data-plane tests to run and pass'
           PYTEST
 
   build:

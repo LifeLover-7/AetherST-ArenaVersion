@@ -44,6 +44,7 @@ class ExitTunnelTest {
             Endpoint = wg.example.test:55123
             AllowedIPs = 0.0.0.0/0, ::/0
         """.trimIndent())
+        assertEquals(key, WireGuardConfigParser.restoreLegacyPsk(cfg.copy(preSharedKey = "")).preSharedKey)
         val json = Json.parseToJsonElement(wireGuardExitConfig(cfg, "127.0.0.1", 3456, 10805, 3457)).jsonObject
         val (first, exit, dnsHop) = json.getValue("outbounds").jsonArray.map { it.jsonObject }
         assertEquals("socks", first.getValue("type").jsonPrimitive.content)
@@ -60,6 +61,12 @@ class ExitTunnelTest {
         assertFailsWith<IllegalArgumentException> { wireGuardExitConfig(cfg.copy(privateKey = "bad"), "127.0.0.1", 2021, 10805, 3457) }
         assertFailsWith<IllegalArgumentException> { wireGuardExitConfig(cfg, "127.0.0.1", 10804, 10805, 3457) }
         assertEquals(HostPort("2001:db8::1", 1234), HostPort.parse("[2001:db8::1]:1234"))
+    }
+
+    @Test fun keepRenewableOAuthWhenLoginAlsoReturnsAShortLivedPass() = kotlinx.coroutines.runBlocking {
+        val saved = FirefoxVpnExitTunnel.exchangeSessionOrOAuthForProxyPass(
+            """{"access_token":"test-oauth","token":"eyJ.test.signature"}""").getOrThrow()
+        assertEquals("fxa::test-oauth:eyJ.test.signature", saved)
     }
 
     // Fake SOCKS5 first hop serving a TLS edge in-place. No DNS, provider accounts or external network.
